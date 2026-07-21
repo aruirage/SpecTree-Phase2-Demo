@@ -183,7 +183,7 @@ test('job cancel stops the backing mock session', async (t) => {
   assert.equal(body.code, 499);
 });
 
-test('clause compare excel export keeps report diff styling', async (t) => {
+test('clause compare excel export keeps row styling separate from field diff styling', async (t) => {
   const baseUrl = await startBackend(t);
 
   const oldForm = new FormData();
@@ -227,12 +227,18 @@ test('clause compare excel export keeps report diff styling', async (t) => {
 
   const deletedRow = sheet.getRow(7);
   assert.equal(deletedRow.getCell(9).value, '削除');
-  assert.equal(deletedRow.getCell(2).font.strike, true);
-  assert.equal(deletedRow.getCell(2).font.color.argb, 'FFDC2626');
+  assert.equal(deletedRow.getCell(2).font.strike, undefined);
+  assert.equal(deletedRow.getCell(2).font.color.argb, 'FF334155');
   assert.equal(deletedRow.getCell(2).fill.fgColor.argb, 'FFE5E7EB');
 
   const addedRow = sheet.getRow(8);
   assert.equal(addedRow.getCell(9).value, '追加');
-  assert.equal(addedRow.getCell(6).font.color.argb, 'FF0076BF');
+  assert.equal(addedRow.getCell(6).font.color.argb, 'FF334155');
   assert.equal(addedRow.getCell(6).fill.fgColor.argb, 'FFDCFCE7');
+
+  const changedRow = sheet.getRow(3);
+  assert.equal(changedRow.getCell(9).value, '変更');
+  assert.equal(changedRow.getCell(2).font.strike, true);
+  assert.equal(changedRow.getCell(2).font.color.argb, 'FFDC2626');
+  assert.equal(changedRow.getCell(6).font.color.argb, 'FF0076BF');
 });

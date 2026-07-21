@@ -42,10 +42,6 @@ const emit = defineEmits(['close', 'upload', 'export-csv', 'export-audit']);
 
           <p class="license-modal__hint">License の更新は進行中のタスクに影響しません。</p>
         </div>
-
-        <footer class="license-modal__footer">
-          <button type="button" class="btn btn-secondary" @click="emit('close')">閉じる</button>
-        </footer>
       </div>
     </div>
   </Teleport>
@@ -140,13 +136,6 @@ const emit = defineEmits(['close', 'upload', 'export-csv', 'export-audit']);
   margin: 16px 0 0;
   font-size: 12px;
   color: var(--color-text-secondary);
-}
-
-.license-modal__footer {
-  padding: 12px 20px 16px;
-  display: flex;
-  justify-content: flex-end;
-  border-top: 1px solid var(--color-border);
 }
 
 .btn {

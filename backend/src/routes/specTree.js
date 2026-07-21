@@ -4,8 +4,10 @@ import {
   appendSystemEvent,
   cancelSessionRun,
   createSpecTreeJobsForRoots,
+  createSpecTreeResult,
   createSpecTreeSession,
   nextId,
+  refreshSessionRun,
   startSpecTreeRun,
   store,
   getCachedResult,
@@ -34,6 +36,28 @@ function resolveRootFileIds(body = {}) {
   }
   if (rootFileId) return [rootFileId];
   return [];
+}
+
+function ensureSpecTreeSession(sessionId) {
+  if (!sessionId) return null;
+  const existing = store.specTreeSessions.get(sessionId);
+  if (existing) return existing;
+  if (!String(sessionId).startsWith('st-')) return null;
+
+  const session = createSpecTreeSession([], { sessionId });
+  const job = store.jobs.find((item) => item.sessionId === sessionId);
+  if (job?.status === 'completed') {
+    session.result = createSpecTreeResult();
+    session.run = {
+      runId: nextId('run'),
+      jobId: job.id,
+      type: 'spec_tree',
+      status: 'completed',
+      startedAt: Date.now(),
+    };
+    session.progress = { running: false, stage: 'succeeded', progress: 100 };
+  }
+  return session;
 }
 
 function startSpecTreeJobs(sourceSession, rootIds, { clientRunId, factory, ipAddress } = {}) {
@@ -208,7 +232,7 @@ router.post('/upload', upload.array('files'), (req, res) => {
 router.post('/generate/start', (req, res) => {
   const { sessionId, clientRunId } = req.body || {};
   const rootIds = resolveRootFileIds(req.body);
-  const session = store.specTreeSessions.get(sessionId);
+  const session = ensureSpecTreeSession(sessionId);
   if (!session) return res.status(404).json({ error: 'session not found', code: 404 });
   if (rootIds.length === 0) {
     return res.status(400).json({ error: 'rootFileId or rootFileIds is required', code: 400 });
@@ -233,8 +257,9 @@ router.post('/generate/start', (req, res) => {
 });
 
 router.get('/progress', (req, res) => {
-  const session = store.specTreeSessions.get(req.query.sessionId);
+  const session = ensureSpecTreeSession(req.query.sessionId);
   if (!session) return res.status(404).json({ error: 'session not found' });
+  refreshSessionRun(session);
   res.json({ running: session.progress.running, ...session.progress });
 });
 
@@ -246,8 +271,9 @@ router.get('/excel', (req, res) => {
 });
 
 router.get('/result', (req, res) => {
-  const session = store.specTreeSessions.get(req.query.sessionId);
+  const session = ensureSpecTreeSession(req.query.sessionId);
   if (!session) return res.status(404).json({ error: 'session not found', code: 404 });
+  refreshSessionRun(session);
   if (session.run?.status === 'cancelled') {
     return res.status(404).json({ error: 'cancelled', code: 499 });
   }
@@ -259,7 +285,7 @@ router.get('/result', (req, res) => {
 
 router.post('/cancel', (req, res) => {
   const { sessionId, runId } = req.body || {};
-  const session = store.specTreeSessions.get(sessionId);
+  const session = ensureSpecTreeSession(sessionId);
   if (!session) return res.status(404).json({ error: 'session not found' });
   if (session.run && runId && session.run.runId !== runId) {
     return res.status(409).json({ error: 'run mismatch' });
@@ -270,7 +296,7 @@ router.post('/cancel', (req, res) => {
 
 router.get('/export', (req, res) => {
   const { format = 'csv', sessionId } = req.query;
-  const session = store.specTreeSessions.get(sessionId);
+  const session = ensureSpecTreeSession(sessionId);
   if (!session?.result) return res.status(404).json({ error: 'no result' });
   const content = format === 'excel'
     ? 'Spec Number,Spec Name,Level\nM000378,ASTM A36,0\nASTM A572,Grade 50,1'

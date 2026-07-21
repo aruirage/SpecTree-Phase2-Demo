@@ -57,19 +57,20 @@ const barClass = computed(() => {
   max-width: 100%;
   margin: 0;
   padding: 10px 8px;
-  border: none;
-  border-top: 1px solid #243044;
-  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 8px;
+  background: #2b3648;
   color: rgba(255, 255, 255, 0.85);
   text-align: left;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background 0.15s, border-color 0.15s;
   flex-shrink: 0;
   box-sizing: border-box;
   overflow: hidden;
 
   &:hover {
-    background: rgba(255, 255, 255, 0.08);
+    background: #334158;
+    border-color: rgba(148, 163, 184, 0.28);
   }
 
   &.collapsed {

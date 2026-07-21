@@ -1,0 +1,21 @@
+{
+  "name": "spectree-phase2-demo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
+  "scripts": {
+    "build": "npm --workspace frontend run build",
+    "vercel-build": "npm run build",
+    "test": "npm --workspace backend test && node frontend/src/utils/systemLogs.test.mjs && node frontend/src/utils/resultTabs.test.mjs",
+    "dev:frontend": "npm --workspace frontend run dev",
+    "dev:backend": "npm --workspace backend run dev",
+    "start:backend": "npm --workspace backend run start"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -9,6 +9,7 @@ import {
   getFactoryFromIP,
   nextId,
   normalizeClientIP,
+  refreshWorkQueue,
   store,
 } from '../store.js';
 
@@ -126,6 +127,7 @@ function createRerunSession(source, sourceSession) {
 }
 
 router.get('/', (req, res) => {
+  refreshWorkQueue();
   const { type } = req.query;
   const scope = req.query.scope || 'active';
   if (!type || !VALID_JOB_TYPES.has(type)) {
@@ -142,6 +144,7 @@ router.get('/', (req, res) => {
 });
 
 router.get('/:id', (req, res) => {
+  refreshWorkQueue();
   const job = store.jobs.find((j) => j.id === req.params.id);
   if (!job) return res.status(404).json({ error: 'job not found' });
   res.json(enrichJob(job, getClientContext(req), getQueuePositions(job.type)));

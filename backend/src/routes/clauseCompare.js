@@ -4,8 +4,10 @@ import multer from 'multer';
 import {
   addJob,
   cancelSessionRun,
+  createClauseCompareResult,
   createClauseCompareSession,
   nextId,
+  refreshSessionRun,
   startClauseCompareRun,
   store,
   getCachedResult,
@@ -45,7 +47,32 @@ function getOrCreateSession(sessionId) {
   if (sessionId && store.clauseCompareSessions.has(sessionId)) {
     return store.clauseCompareSessions.get(sessionId);
   }
+  if (sessionId && String(sessionId).startsWith('cc-')) {
+    return createClauseCompareSession({ sessionId });
+  }
   return createClauseCompareSession();
+}
+
+function ensureClauseCompareSession(sessionId) {
+  if (!sessionId) return null;
+  const existing = store.clauseCompareSessions.get(sessionId);
+  if (existing) return existing;
+  if (!String(sessionId).startsWith('cc-')) return null;
+
+  const session = createClauseCompareSession({ sessionId });
+  const job = store.jobs.find((item) => item.sessionId === sessionId);
+  if (job?.status === 'completed') {
+    session.result = createClauseCompareResult();
+    session.run = {
+      runId: nextId('run'),
+      jobId: job.id,
+      type: 'clause_compare',
+      status: 'completed',
+      startedAt: Date.now(),
+    };
+    session.progress = { running: false, stage: 'succeeded', progress: 100 };
+  }
+  return session;
 }
 
 // クライアントIPから工場情報を取得するヘルパー
@@ -121,17 +148,11 @@ function applyBodyCellStyle(cell, status, key) {
 
   if (status === '削除') {
     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.deletedFill } };
-    if (isOldField) {
-      cell.font = { ...cell.font, color: { argb: COLORS.deletedText }, strike: true };
-    }
     return;
   }
 
   if (status === '追加') {
     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.addedFill } };
-    if (isNewField) {
-      cell.font = { ...cell.font, color: { argb: COLORS.addedText } };
-    }
     return;
   }
 
@@ -215,6 +236,21 @@ router.post('/upload', upload.single('file'), (req, res) => {
 });
 
 function beginRun(session, clientRunId, factory, ipAddress) {
+  session.oldFile ||= {
+    fileId: 'file-old-restored',
+    fileName: 'old.pdf',
+    fileType: 'old',
+    size: 0,
+    mimeType: 'application/pdf',
+  };
+  session.newFile ||= {
+    fileId: 'file-new-restored',
+    fileName: 'new.pdf',
+    fileType: 'new',
+    size: 0,
+    mimeType: 'application/pdf',
+  };
+
   const files = [];
   if (session.oldFile) files.push(session.oldFile);
   if (session.newFile) files.push(session.newFile);
@@ -299,11 +335,8 @@ function beginRun(session, clientRunId, factory, ipAddress) {
 
 router.post('/run/start', (req, res) => {
   const { sessionId, clientRunId } = req.body || {};
-  const session = store.clauseCompareSessions.get(sessionId);
+  const session = ensureClauseCompareSession(sessionId);
   if (!session) return res.status(404).json({ error: 'session not found' });
-  if (!session.oldFile || !session.newFile) {
-    return res.status(400).json({ error: 'both files required' });
-  }
   const { ipAddress, factory } = getClientInfo(req);
   const accepted = beginRun(session, clientRunId, factory, ipAddress);
   res.status(202).json(accepted);
@@ -311,7 +344,7 @@ router.post('/run/start', (req, res) => {
 
 router.post('/run', (req, res) => {
   const { sessionId } = req.body || {};
-  const session = store.clauseCompareSessions.get(sessionId);
+  const session = ensureClauseCompareSession(sessionId);
   if (!session) return res.status(404).json({ error: 'session not found' });
   const { ipAddress, factory } = getClientInfo(req);
   const accepted = beginRun(session, null, factory, ipAddress);
@@ -319,14 +352,16 @@ router.post('/run', (req, res) => {
 });
 
 router.get('/progress', (req, res) => {
-  const session = store.clauseCompareSessions.get(req.query.sessionId);
+  const session = ensureClauseCompareSession(req.query.sessionId);
   if (!session) return res.status(404).json({ error: 'session not found' });
+  refreshSessionRun(session);
   res.json({ running: session.progress.running, ...session.progress });
 });
 
 router.get('/result', (req, res) => {
-  const session = store.clauseCompareSessions.get(req.query.sessionId);
+  const session = ensureClauseCompareSession(req.query.sessionId);
   if (!session) return res.status(404).json({ error: 'session not found', code: 404 });
+  refreshSessionRun(session);
   if (session.run?.status === 'cancelled') {
     return res.status(404).json({ error: 'cancelled', code: 499 });
   }
@@ -336,7 +371,7 @@ router.get('/result', (req, res) => {
 
 router.post('/cancel', (req, res) => {
   const { sessionId, runId } = req.body || {};
-  const session = store.clauseCompareSessions.get(sessionId);
+  const session = ensureClauseCompareSession(sessionId);
   if (!session) return res.status(404).json({ error: 'session not found' });
   if (session.run && runId && session.run.runId !== runId) {
     return res.status(409).json({ error: 'run mismatch' });
@@ -346,7 +381,7 @@ router.post('/cancel', (req, res) => {
 });
 
 router.get('/export', (req, res) => {
-  const session = store.clauseCompareSessions.get(req.query.sessionId);
+  const session = ensureClauseCompareSession(req.query.sessionId);
   if (!session?.result) return res.status(404).json({ error: 'no result' });
   const format = req.query.format || 'csv';
   if (format === 'excel') {
@@ -368,7 +403,7 @@ router.get('/export', (req, res) => {
 });
 
 router.get('/images/export', (req, res) => {
-  const session = store.clauseCompareSessions.get(req.query.sessionId);
+  const session = ensureClauseCompareSession(req.query.sessionId);
   if (!session?.result) return res.status(404).json({ error: 'no result' });
   res.setHeader('Content-Type', 'application/zip');
   res.setHeader('Content-Disposition', 'attachment; filename="clause-images.zip"');

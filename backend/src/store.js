@@ -94,6 +94,7 @@ export const store = {
       at: '2026-06-30T10:00:00',
       actionType: 'タスク完了',
       feature: '条項比較',
+      processCount: 2,
       pages: 86,
       detail: '差分抽出',
       operator: 'user01',
@@ -105,6 +106,7 @@ export const store = {
       at: '2026-06-30T14:30:00',
       actionType: 'タスク完了',
       feature: 'スペックツリー',
+      processCount: 2,
       pages: 124,
       detail: 'ツリー作成',
       operator: 'user02',
@@ -116,6 +118,7 @@ export const store = {
       at: '2026-06-30T15:45:00',
       actionType: 'タスク完了',
       feature: 'スペックツリー',
+      processCount: 1,
       pages: 68,
       detail: 'ツリー作成',
       operator: 'user03',
@@ -127,6 +130,7 @@ export const store = {
       at: '2026-06-29T09:15:00',
       actionType: 'タスク完了',
       feature: '条項比較',
+      processCount: 2,
       pages: 156,
       detail: '差分抽出',
       operator: 'user01',
@@ -138,6 +142,7 @@ export const store = {
       at: '2026-06-28T16:20:00',
       actionType: 'タスク完了',
       feature: 'スペックツリー',
+      processCount: 1,
       pages: 92,
       detail: 'ツリー作成',
       operator: 'user04',
@@ -221,8 +226,11 @@ export function getPromptDetail(key) {
   };
 }
 
-export function createSpecTreeSession(files = [], { rootFileId = null, parentSessionId = null } = {}) {
-  const sessionId = nextId('st');
+export function createSpecTreeSession(files = [], {
+  rootFileId = null,
+  parentSessionId = null,
+  sessionId = nextId('st'),
+} = {}) {
   const session = {
     sessionId,
     files,
@@ -271,8 +279,7 @@ export function createSpecTreeJobsForRoots(session, rootFileIds = []) {
   return jobs;
 }
 
-export function createClauseCompareSession() {
-  const sessionId = nextId('cc');
+export function createClauseCompareSession({ sessionId = nextId('cc') } = {}) {
   const session = {
     sessionId,
     oldFile: null,
@@ -304,48 +311,145 @@ const CLAUSE_STAGES = [
   { stage: 'succeeded', delay: 150, progress: 100, pageTotal: 86, pageCompleted: 86 },
 ];
 
-function runStagePipeline(session, stages, onComplete, { jobId } = {}) {
-  let index = 0;
-  session.progress = { running: true, stage: stages[0].stage };
+export function createSpecTreeResult() {
+  return {
+    mmdContent: MOCK_SPEC_TREE_MMD,
+    nodeCount: 4,
+    treeNodes: [
+      { id: 'root', label: 'M000378 Rev:C ASTM A36', level: 0 },
+      { id: 'n1', label: 'ASTM A572 Grade 50', level: 1 },
+      { id: 'n2', label: 'ASTM A588', level: 1 },
+      { id: 'n3', label: 'AMS2750E Pyrometry', level: 2 },
+    ],
+  };
+}
 
-  function next() {
-    const step = stages[index];
-    if (!step) return;
-    if (session.run?.status === 'cancelled') {
-      session.progress = { running: false, stage: 'cancelled' };
-      const cancelledJob = store.jobs.find((j) => j.id === jobId);
-      if (cancelledJob) {
-        cancelledJob.status = 'cancelled';
-        cancelledJob.updatedAt = new Date().toISOString();
-      }
-      return;
-    }
-    session.progress = {
-      running: true,
-      stage: step.stage,
-      pdfTotal: step.pdfTotal ?? session.progress.pdfTotal ?? 0,
-      pdfCompleted: step.pdfCompleted ?? session.progress.pdfCompleted ?? 0,
-      pageTotal: step.pageTotal ?? session.progress.pageTotal ?? 0,
-      pageCompleted: step.pageCompleted ?? session.progress.pageCompleted ?? 0,
-      requestTotal: step.requestTotal ?? session.progress.requestTotal ?? 0,
-      requestCompleted: step.requestCompleted ?? session.progress.requestCompleted ?? 0,
-    };
-    const job = store.jobs.find((j) => j.id === jobId);
-    if (job) {
-      job.status = step.stage === 'queued' ? 'queued' : 'running';
-      job.progress = Math.max(job.progress || 0, step.progress ?? job.progress ?? 0);
-      job.updatedAt = new Date().toISOString();
-    }
-    index += 1;
-    if (index >= stages.length) {
-      session.progress.running = false;
-      onComplete();
-      return;
-    }
-    setTimeout(next, step.delay);
+export function createClauseCompareResult() {
+  return structuredClone(MOCK_CLAUSE_COMPARE);
+}
+
+function stagesForType(type) {
+  return type === 'spec_tree' ? SPEC_TREE_STAGES : CLAUSE_STAGES;
+}
+
+function resultForType(type) {
+  return type === 'spec_tree' ? createSpecTreeResult() : createClauseCompareResult();
+}
+
+function composeProgressState(stages, stageIndex, running) {
+  const state = {
+    running,
+    stage: stages[stageIndex]?.stage || stages[stages.length - 1].stage,
+    progress: stages[stageIndex]?.progress || 0,
+    pdfTotal: 0,
+    pdfCompleted: 0,
+    pageTotal: 0,
+    pageCompleted: 0,
+    requestTotal: 0,
+    requestCompleted: 0,
+  };
+
+  for (let i = 0; i <= stageIndex; i += 1) {
+    const step = stages[i];
+    state.pdfTotal = step.pdfTotal ?? state.pdfTotal;
+    state.pdfCompleted = step.pdfCompleted ?? state.pdfCompleted;
+    state.pageTotal = step.pageTotal ?? state.pageTotal;
+    state.pageCompleted = step.pageCompleted ?? state.pageCompleted;
+    state.requestTotal = step.requestTotal ?? state.requestTotal;
+    state.requestCompleted = step.requestCompleted ?? state.requestCompleted;
   }
 
-  setTimeout(next, stages[0].delay);
+  return state;
+}
+
+function getPipelineState(type, startedAt) {
+  const stages = stagesForType(type);
+  const elapsed = Math.max(0, Date.now() - Number(startedAt || Date.now()));
+  const totalDuration = stages.reduce((sum, step) => sum + Math.max(0, Number(step.delay) || 0), 0);
+  let stageIndex = stages.length - 1;
+  let elapsedBoundary = 0;
+
+  for (let i = 0; i < stages.length; i += 1) {
+    elapsedBoundary += Math.max(0, Number(stages[i].delay) || 0);
+    if (elapsed < elapsedBoundary) {
+      stageIndex = i;
+      break;
+    }
+  }
+
+  return {
+    complete: elapsed >= totalDuration,
+    progress: composeProgressState(stages, stageIndex, elapsed < totalDuration),
+  };
+}
+
+function removeRunningTask(jobId) {
+  if (!jobId) return null;
+  const index = store.runningTasks.findIndex((task) => task.jobId === jobId);
+  if (index < 0) return null;
+  const [task] = store.runningTasks.splice(index, 1);
+  return task;
+}
+
+function completeRunningTask(session) {
+  const task = removeRunningTask(session.run?.jobId);
+  if (!task) return;
+
+  if (session.result) {
+    cacheResult(task.type, task.files, session, task.options);
+  }
+
+  const completedJob = store.jobs.find((j) => j.id === task.jobId);
+  if (completedJob && session.run?.status === 'completed') {
+    appendSystemEvent({
+      site: task.factory,
+      ipAddress: task.ipAddress,
+      actionType: 'タスク完了',
+      feature: task.type === 'spec_tree' ? 'スペックツリー' : '条項比較',
+      processCount: task.type === 'spec_tree' ? Math.max(1, task.files?.length || 1) : 2,
+      pages: task.type === 'spec_tree' ? 124 : 86,
+      detail: task.type === 'spec_tree' ? 'ツリー作成' : '差分抽出',
+      operator: 'system',
+      note: completedJob.title,
+    });
+  }
+
+  processQueue();
+}
+
+export function refreshSessionRun(session) {
+  if (!session?.run || session.run.status !== 'running') return session;
+  const type = session.run.type;
+  if (!type) return session;
+
+  const { complete, progress } = getPipelineState(type, session.run.startedAt);
+  session.progress = progress;
+
+  const job = store.jobs.find((j) => j.id === session.run.jobId);
+  if (job) {
+    job.status = complete ? 'completed' : 'running';
+    job.progress = complete ? 100 : Math.max(job.progress || 0, progress.progress || 0);
+    job.updatedAt = new Date().toISOString();
+  }
+
+  if (complete) {
+    session.result = resultForType(type);
+    session.run.status = 'completed';
+    session.progress = {
+      ...composeProgressState(stagesForType(type), stagesForType(type).length - 1, false),
+      progress: 100,
+    };
+    completeRunningTask(session);
+  }
+
+  return session;
+}
+
+export function refreshWorkQueue() {
+  for (const task of [...store.runningTasks]) {
+    refreshSessionRun(task.session);
+  }
+  processQueue();
 }
 
 export function startSpecTreeRun(session, { runId, jobId }) {
@@ -355,57 +459,39 @@ export function startSpecTreeRun(session, { runId, jobId }) {
     throw err;
   }
   session.result = null;
-  session.run = { runId, jobId, status: 'running', startedAt: Date.now() };
+  session.run = { runId, jobId, type: 'spec_tree', status: 'running', startedAt: Date.now() };
+  session.progress = composeProgressState(SPEC_TREE_STAGES, 0, true);
   const job = store.jobs.find((j) => j.id === jobId);
   if (job) {
     job.status = 'running';
     job.progress = 10;
     job.updatedAt = new Date().toISOString();
   }
-
-  runStagePipeline(session, SPEC_TREE_STAGES, () => {
-    session.result = {
-      mmdContent: MOCK_SPEC_TREE_MMD,
-      nodeCount: 4,
-      treeNodes: [
-        { id: 'root', label: 'M000378 Rev:C ASTM A36', level: 0 },
-        { id: 'n1', label: 'ASTM A572 Grade 50', level: 1 },
-        { id: 'n2', label: 'ASTM A588', level: 1 },
-        { id: 'n3', label: 'AMS2750E Pyrometry', level: 2 },
-      ],
-    };
-    session.run.status = 'completed';
-    if (job) {
-      job.status = 'completed';
-      job.progress = 100;
-      job.updatedAt = new Date().toISOString();
-    }
-  }, { jobId });
 }
 
 export function startClauseCompareRun(session, { runId, jobId }) {
   session.result = null;
-  session.run = { runId, jobId, status: 'running', startedAt: Date.now() };
+  session.run = { runId, jobId, type: 'clause_compare', status: 'running', startedAt: Date.now() };
+  session.progress = composeProgressState(CLAUSE_STAGES, 0, true);
   const job = store.jobs.find((j) => j.id === jobId);
   if (job) {
     job.status = 'running';
     job.progress = 15;
     job.updatedAt = new Date().toISOString();
   }
-
-  runStagePipeline(session, CLAUSE_STAGES, () => {
-    session.result = structuredClone(MOCK_CLAUSE_COMPARE);
-    session.run.status = 'completed';
-    if (job) {
-      job.status = 'completed';
-      job.progress = 100;
-      job.updatedAt = new Date().toISOString();
-    }
-  }, { jobId });
 }
 
 export function cancelSessionRun(session) {
-  if (session.run) session.run.status = 'cancelled';
+  if (session.run) {
+    session.run.status = 'cancelled';
+    const job = store.jobs.find((j) => j.id === session.run.jobId);
+    if (job) {
+      job.status = 'cancelled';
+      job.updatedAt = new Date().toISOString();
+    }
+    removeRunningTask(session.run.jobId);
+    processQueue();
+  }
   session.progress = { running: false, stage: 'cancelled' };
   session.result = null;
 }
@@ -497,6 +583,10 @@ export function enqueueTask(task) {
 
 // キューを処理する
 function processQueue() {
+  for (const task of [...store.runningTasks]) {
+    refreshSessionRun(task.session);
+  }
+
   // 実行中のタスクが最大数に達していたら何もしない
   if (store.runningTasks.length >= store.maxConcurrentTasks) {
     return;
@@ -541,44 +631,11 @@ function executeTask(task) {
   } else {
     startClauseCompareRun(session, { runId: task.runId, jobId: task.jobId });
   }
-  
-  // タスク完了後にキューを進める
-  const checkCompletion = setInterval(() => {
-    if (session.run?.status === 'completed' || session.run?.status === 'cancelled' || session.run?.status === 'failed') {
-      clearInterval(checkCompletion);
-      
-      // 実行中リストから削除
-      const index = store.runningTasks.findIndex(t => t.runId === task.runId);
-      if (index > -1) {
-        store.runningTasks.splice(index, 1);
-      }
-      
-      // 結果をキャッシュ
-      if (session.result) {
-        cacheResult(type, files, session, options);
-      }
-      const completedJob = store.jobs.find((j) => j.id === task.jobId);
-      if (completedJob && session.run?.status === 'completed') {
-        appendSystemEvent({
-          site: factory,
-          ipAddress: ipAddress,
-          actionType: 'タスク完了',
-          feature: type === 'spec_tree' ? 'スペックツリー' : '条項比較',
-          pages: type === 'spec_tree' ? 124 : 86,
-          detail: type === 'spec_tree' ? 'ツリー作成' : '差分抽出',
-          operator: 'system',
-          note: completedJob.title,
-        });
-      }
-      
-      // 次のタスクを処理
-      processQueue();
-    }
-  }, 500);
 }
 
 // キューの状態を取得する
 export function getQueueStatus() {
+  refreshWorkQueue();
   return {
     queued: store.taskQueue.length,
     running: store.runningTasks.length,

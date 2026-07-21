@@ -1790,18 +1790,6 @@ tr:hover td { filter: brightness(0.97); }
   color: #475569;
 }
 
-.row-deleted .cell-content,
-.row-deleted .cell-translation {
-  color: #dc2626;
-  text-decoration: line-through;
-  text-decoration-thickness: 1px;
-}
-
-.row-added .cell-content,
-.row-added .cell-translation {
-  color: #0076bf;
-}
-
 .diff-added,
 .diff-removed {
   border-radius: 2px;

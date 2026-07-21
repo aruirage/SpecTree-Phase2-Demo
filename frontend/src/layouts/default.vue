@@ -217,7 +217,9 @@ function isActive(path) {
   flex-shrink: 0;
   min-width: 0;
   width: 100%;
-  overflow: hidden;
+  padding: 0 6px 6px;
+  box-sizing: border-box;
+  overflow: visible;
 }
 
 .nav-item {
