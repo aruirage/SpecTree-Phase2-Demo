@@ -16,6 +16,6 @@
     "start:backend": "npm --workspace backend run start"
   },
   "engines": {
-    "node": ">=20"
+    "node": "24.x"
   }
 }
