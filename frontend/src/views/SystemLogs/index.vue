@@ -8,11 +8,12 @@ import {
 } from '@/api/system';
 import {
   filterSystemLogs,
+  formatLogDateTime,
   formatLogFeature,
   formatLogPageCount,
-  formatLogProcessCount,
   formatLogStatus,
   formatLogTarget,
+  formatLogTotalPageCount,
   getVisiblePageNumbers,
   LOG_FEATURE_FILTERS,
   paginateItems,
@@ -94,8 +95,12 @@ onMounted(async () => {
   setInterval(loadSystemStatus, 5000);
 });
 
+const processedPages = computed(() => {
+  return filteredLogs.value.reduce((sum, log) => sum + formatLogPageCount(log), 0);
+});
+
 const totalPages = computed(() => {
-  return logs.value.reduce((sum, log) => sum + (Number(log.pages) || 0), 0);
+  return filteredLogs.value.reduce((sum, log) => sum + formatLogTotalPageCount(log), 0);
 });
 
 const filteredLogs = computed(() => filterSystemLogs(logs.value, appliedFilters.value));
@@ -153,10 +158,10 @@ function handleSortChange({ prop, order }) {
 
       <div class="stats-cards">
         <div class="stat-card">
-          <div class="stat-label">総処理数</div>
+          <div class="stat-label">処理ページ数</div>
           <div class="stat-number">
-            <span class="stat-value">{{ logs.length }}</span>
-            <span class="stat-unit">件</span>
+            <span class="stat-value">{{ processedPages }}</span>
+            <span class="stat-unit">ページ</span>
           </div>
         </div>
         <div class="stat-card">
@@ -253,18 +258,23 @@ function handleSortChange({ prop, order }) {
         :data="pagedLogs"
         v-loading="loading"
         stripe
+        fit
         style="width: 100%"
         @sort-change="handleSortChange"
       >
         <el-table-column
           prop="at"
-          label="操作日時"
-          width="170"
-        />
+          label="利用日時"
+          min-width="160"
+        >
+          <template #default="{ row }">
+            {{ formatLogDateTime(row.at) }}
+          </template>
+        </el-table-column>
         <el-table-column
           prop="ipAddress"
           label="IP"
-          width="130"
+          min-width="130"
         />
         <el-table-column
           prop="site"
@@ -281,20 +291,9 @@ function handleSortChange({ prop, order }) {
           </template>
         </el-table-column>
         <el-table-column
-          prop="actionType"
-          label="操作種別"
-          min-width="120"
-        >
-          <template #default="{ row }">
-            <span class="action-type">
-              {{ row.actionType }}
-            </span>
-          </template>
-        </el-table-column>
-        <el-table-column
           prop="note"
           label="操作対象"
-          min-width="260"
+          min-width="180"
           show-overflow-tooltip
         >
           <template #default="{ row }">
@@ -302,19 +301,9 @@ function handleSortChange({ prop, order }) {
           </template>
         </el-table-column>
         <el-table-column
-          prop="processCount"
-          label="処理件数"
-          width="112"
-          sortable="custom"
-        >
-          <template #default="{ row }">
-            <span class="pages-count">{{ formatLogProcessCount(row) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column
           prop="pages"
           label="処理ページ数"
-          width="132"
+          min-width="130"
           sortable="custom"
         >
           <template #default="{ row }">
@@ -322,8 +311,18 @@ function handleSortChange({ prop, order }) {
           </template>
         </el-table-column>
         <el-table-column
-          label="ステータス"
-          width="100"
+          prop="totalPages"
+          label="総ページ数"
+          min-width="130"
+          sortable="custom"
+        >
+          <template #default="{ row }">
+            <span class="pages-count">{{ formatLogTotalPageCount(row) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column
+          label="処理結果"
+          min-width="120"
         >
           <template #default="{ row }">
             <span class="status-pill" :class="`status-pill--${formatLogStatus(row)}`">
@@ -629,11 +628,6 @@ function handleSortChange({ prop, order }) {
 
 :deep(.el-table .caret-wrapper) {
   flex-shrink: 0;
-}
-
-.action-type {
-  color: #303133;
-  font-weight: 500;
 }
 
 .status-pill {

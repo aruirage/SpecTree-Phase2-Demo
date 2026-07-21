@@ -3,25 +3,37 @@ import { refreshWorkQueue, store } from '../store.js';
 
 const router = Router();
 
-function resolveProcessCount(event) {
-  const explicitCount = Number(event.processCount);
-  if (explicitCount > 0) return explicitCount;
+function formatFeature(feature = '') {
+  if (feature === '条項比較' || feature === 'clause_compare') return 'スペック新旧比較';
+  if (feature === 'spec_tree') return 'スペックツリー';
+  return feature || '不明';
+}
 
-  const target = String(event.note || event.detail || '');
-  if (!target) return 1;
-  if (target.includes(' vs ')) return 2;
+function resolveResult(event) {
+  const actionType = String(event.actionType || '');
+  if (actionType.includes('開始')) return '処理中';
+  if (actionType.includes('失敗')) return '失敗';
+  if (actionType.includes('中止') || actionType.includes('停止')) return '中止';
+  return '成功';
+}
 
-  const separator = target.includes(';') ? ';' : target.includes('・') ? '・' : '';
-  if (!separator) return 1;
+function resolveTotalPages(event) {
+  return Number(event.totalPages ?? event.pages) || 0;
+}
 
-  return Math.max(1, target.split(separator).filter((item) => item.trim()).length);
+function isUsageEvent(event) {
+  const feature = formatFeature(event.feature);
+  if (feature !== 'スペックツリー' && feature !== 'スペック新旧比較') return false;
+  if (resolveResult(event) === '処理中') return false;
+  return resolveTotalPages(event) > 0;
 }
 
 router.get('/list', (req, res) => {
   refreshWorkQueue();
+  const events = store.systemEvents.filter(isUsageEvent);
   res.json({
-    total: store.systemEvents.length,
-    events: store.systemEvents,
+    total: events.length,
+    events,
   });
 });
 
@@ -46,16 +58,17 @@ router.get('/export', (req, res) => {
     return res.send(Buffer.from(JSON.stringify(payload, null, 2), 'utf-8'));
   }
 
-  const header = '拠点,IPアドレス,日時,操作種別,機能,処理件数,処理ページ数,備考';
-  const rows = store.systemEvents.map((e) => [
-    e.site,
-    e.ipAddress || '',
+  const events = store.systemEvents.filter(isUsageEvent);
+  const header = '利用日時,IPアドレス,工場・拠点,機能,操作対象,処理ページ数,総ページ数,処理結果';
+  const rows = events.map((e) => [
     e.at,
-    e.actionType,
-    e.feature,
-    resolveProcessCount(e),
+    e.ipAddress || '',
+    e.site,
+    formatFeature(e.feature),
+    e.note || e.detail || '',
     e.pages,
-    e.note,
+    resolveTotalPages(e),
+    resolveResult(e),
   ].join(','));
   const csv = '\ufeff' + [header, ...rows].join('\n');
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');

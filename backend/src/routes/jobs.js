@@ -165,9 +165,10 @@ router.post('/:id/cancel', (req, res) => {
   appendSystemEvent({
     site: job.factory || getClientContext(req).factory,
     ipAddress: job.ipAddress || getClientContext(req).ipAddress,
-    actionType: 'タスク停止',
+    actionType: 'タスク中止',
     feature: job.type === 'spec_tree' ? 'スペックツリー' : '条項比較',
-    pages: 0,
+    pages: job.type === 'spec_tree' ? Math.max(1, Math.round(124 * ((job.progress || 35) / 100))) : Math.max(1, Math.round(86 * ((job.progress || 35) / 100))),
+    totalPages: job.type === 'spec_tree' ? 124 : 86,
     detail: job.type === 'spec_tree' ? 'ツリー作成' : '差分抽出',
     operator: 'demo-user',
     note: job.title,

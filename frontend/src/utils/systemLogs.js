@@ -13,35 +13,36 @@ export function filterLogByFeature(value, row) {
   return formatLogFeature(row?.feature) === value;
 }
 
-export function formatLogTarget(row) {
-  return row?.note || row?.detail || '-';
+export function formatLogDateTime(value) {
+  return String(value || '').replace('T', ' ');
 }
 
-export function formatLogProcessCount(row) {
-  const explicitCount = Number(row?.processCount);
-  if (explicitCount > 0) return explicitCount;
-
-  const target = formatLogTarget(row);
-  if (!target || target === '-') return 1;
-
-  if (target.includes(' vs ')) return 2;
-
-  const separator = target.includes(';') ? ';' : target.includes('・') ? '・' : '';
-  if (!separator) return 1;
-
-  return Math.max(1, target.split(separator).filter((item) => item.trim()).length);
+export function formatLogTarget(row) {
+  return row?.note || row?.detail || '-';
 }
 
 export function formatLogPageCount(row) {
   return Number(row?.pages) || 0;
 }
 
+export function formatLogTotalPageCount(row) {
+  return Number(row?.totalPages ?? row?.pages) || 0;
+}
+
 export function formatLogStatus(row) {
   const actionType = String(row?.actionType || '');
   if (actionType.includes('開始')) return '処理中';
   if (actionType.includes('失敗')) return '失敗';
-  if (actionType.includes('中止')) return '中止';
+  if (actionType.includes('中止') || actionType.includes('停止')) return '中止';
   return '成功';
+}
+
+export function isUsageLog(row) {
+  const feature = formatLogFeature(row?.feature);
+  const result = formatLogStatus(row);
+  if (!LOG_FEATURE_FILTERS.some((item) => item.value === feature)) return false;
+  if (result === '処理中') return false;
+  return formatLogTotalPageCount(row) > 0;
 }
 
 export function sortSystemLogs(logs, sort = {}) {
@@ -49,10 +50,10 @@ export function sortSystemLogs(logs, sort = {}) {
   const direction = order === 'ascending' ? 1 : order === 'descending' ? -1 : 0;
   if (!direction) return logs;
 
-  const getValue = sort?.prop === 'processCount'
-    ? formatLogProcessCount
-    : sort?.prop === 'pages'
+  const getValue = sort?.prop === 'pages'
       ? formatLogPageCount
+      : sort?.prop === 'totalPages'
+        ? formatLogTotalPageCount
       : null;
 
   if (!getValue) return logs;
@@ -78,6 +79,7 @@ export function filterSystemLogs(logs, filters = {}) {
   const feature = filters.feature || '';
 
   return logs.filter((log) => {
+    if (!isUsageLog(log)) return false;
     const logTime = Date.parse(log?.at || '');
     if (startTime !== null && (!Number.isFinite(logTime) || logTime < startTime)) return false;
     if (endTime !== null && (!Number.isFinite(logTime) || logTime > endTime)) return false;
@@ -89,10 +91,9 @@ export function filterSystemLogs(logs, filters = {}) {
       log?.ipAddress,
       log?.site,
       formatLogFeature(log?.feature),
-      log?.actionType,
       formatLogTarget(log),
-      formatLogProcessCount(log),
       formatLogPageCount(log),
+      formatLogTotalPageCount(log),
       formatLogStatus(log),
     ].join(' ').toLowerCase();
 
