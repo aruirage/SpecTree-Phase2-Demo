@@ -42,3 +42,11 @@ export function downloadLogExport(format) {
   a.click();
   document.body.removeChild(a);
 }
+
+export function downloadSettlementCounter() {
+  const a = document.createElement('a');
+  a.href = '/api/license/settlement-counter/export';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}

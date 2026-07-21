@@ -37,18 +37,8 @@ function generateCacheKey(type, files, options = {}) {
 
 export const store = {
   excelConfig: {
-    supplement: {
-      fileName: 'supplement_default.xlsx',
-      uploadedAt: '2026-06-05T10:00:00.000Z',
-      size: 245760,
-      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    },
-    deletion: {
-      fileName: 'deletion_default.xlsx',
-      uploadedAt: '2026-06-05T10:05:00.000Z',
-      size: 98304,
-      mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    },
+    supplement: null,
+    deletion: null,
   },
   license: {
     status: 'active',
@@ -97,6 +87,7 @@ export const store = {
       processCount: 2,
       pages: 86,
       totalPages: 86,
+      durationMinutes: 18,
       detail: '差分抽出',
       operator: 'user01',
       note: 'AMS2750E.pdf;AMS2750F.pdf',
@@ -110,6 +101,7 @@ export const store = {
       processCount: 2,
       pages: 124,
       totalPages: 124,
+      durationMinutes: 26,
       detail: 'ツリー作成',
       operator: 'user02',
       note: 'M000378.pdf;M000412.pdf',
@@ -123,6 +115,7 @@ export const store = {
       processCount: 1,
       pages: 68,
       totalPages: 68,
+      durationMinutes: 14,
       detail: 'ツリー作成',
       operator: 'user03',
       note: 'M000501.pdf',
@@ -136,6 +129,7 @@ export const store = {
       processCount: 2,
       pages: 156,
       totalPages: 156,
+      durationMinutes: 32,
       detail: '差分抽出',
       operator: 'user01',
       note: 'AS9100D.pdf;AS9100E.pdf',
@@ -149,6 +143,7 @@ export const store = {
       processCount: 1,
       pages: 92,
       totalPages: 92,
+      durationMinutes: 21,
       detail: 'ツリー作成',
       operator: 'user04',
       note: 'M000388.pdf',
@@ -161,6 +156,7 @@ export const store = {
       feature: '条項比較',
       pages: 42,
       totalPages: 118,
+      durationMinutes: 9,
       detail: '差分抽出',
       operator: 'user01',
       note: 'AMS5510J.pdf;AMS5510K.pdf',
@@ -171,8 +167,9 @@ export const store = {
       at: '2026-06-27T17:10:00',
       actionType: 'タスク失敗',
       feature: 'スペックツリー',
-      pages: 18,
+      pages: 0,
       totalPages: 76,
+      durationMinutes: 6,
       detail: 'ツリー作成',
       operator: 'user03',
       note: 'M000621.pdf',
@@ -294,7 +291,8 @@ export function createSpecTreeJobsForRoots(session, rootFileIds = []) {
     const targetSession = roots.length > 1
       ? cloneSpecTreeSession(session, rootFileId)
       : session;
-    const title = `M000378 · ${rootFileLabel(session, rootFileId)}`;
+    targetSession.rootFileId = rootFileId;
+    const title = `${rootFileLabel(session, rootFileId)} スペックツリー`;
     const job = addJob({
       type: 'spec_tree',
       title,
@@ -420,6 +418,22 @@ function removeRunningTask(jobId) {
   return task;
 }
 
+export function resolveTaskTarget(task, fallbackTitle = '') {
+  if (task.type === 'spec_tree') {
+    const names = (task.files || [])
+      .map((file) => file.name || file.fileName || file.originalname)
+      .filter(Boolean);
+    if (names.length > 0) return names.join(';');
+  }
+  return fallbackTitle || '';
+}
+
+export function resolveRunDurationMinutes(startedAt, endedAt = Date.now()) {
+  const start = Number(startedAt);
+  if (!Number.isFinite(start) || start <= 0) return 0;
+  return Math.max(1, Math.round((Number(endedAt) - start) / 60000));
+}
+
 function completeRunningTask(session) {
   const task = removeRunningTask(session.run?.jobId);
   if (!task) return;
@@ -438,9 +452,10 @@ function completeRunningTask(session) {
       processCount: task.type === 'spec_tree' ? Math.max(1, task.files?.length || 1) : 2,
       pages: task.type === 'spec_tree' ? 124 : 86,
       totalPages: task.type === 'spec_tree' ? 124 : 86,
+      durationMinutes: resolveRunDurationMinutes(session.run?.startedAt),
       detail: task.type === 'spec_tree' ? 'ツリー作成' : '差分抽出',
       operator: 'system',
-      note: completedJob.title,
+      note: resolveTaskTarget(task, completedJob.title),
     });
   }
 

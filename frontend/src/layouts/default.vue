@@ -5,7 +5,7 @@ import { ElMessage } from 'element-plus';
 import logo from '@/assets/llm-ocr-logo.png';
 import LicenseWidget from '@/components/LicenseWidget.vue';
 import LicenseModal from '@/components/LicenseModal.vue';
-import { fetchCurrentLicense, uploadLicenseFile } from '@/api/license';
+import { downloadSettlementCounter, fetchCurrentLicense, uploadLicenseFile } from '@/api/license';
 
 const collapsed = ref(false);
 const licenseModalOpen = ref(false);
@@ -48,6 +48,11 @@ function handleLicenseUpload() {
     }
   };
   input.click();
+}
+
+function handleSettlementCounterDownload() {
+  downloadSettlementCounter();
+  ElMessage.success('精算用カウントファイルのダウンロードを開始しました');
 }
 
 onMounted(loadLicense);
@@ -93,11 +98,13 @@ function isActive(path) {
             <polyline points="10,9 9,9 8,9"/>
           </svg>
           <svg v-else-if="item.path === '/system-logs'" class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-            <polyline points="14 2 14 8 20 8"/>
-            <line x1="16" y1="13" x2="8" y2="13"/>
-            <line x1="16" y1="17" x2="8" y2="17"/>
-            <line x1="10" y1="9" x2="8" y2="9"/>
+            <path d="M5 5v14"/>
+            <circle cx="5" cy="6" r="2"/>
+            <circle cx="5" cy="12" r="2"/>
+            <circle cx="5" cy="18" r="2"/>
+            <line x1="10" y1="6" x2="20" y2="6"/>
+            <line x1="10" y1="12" x2="20" y2="12"/>
+            <line x1="10" y1="18" x2="20" y2="18"/>
           </svg>
 
           <span v-if="!collapsed" class="nav-label">{{ item.label }}</span>
@@ -148,6 +155,7 @@ function isActive(path) {
       :license="licenseInfo"
       @close="licenseModalOpen = false"
       @upload="handleLicenseUpload"
+      @download-settlement-counter="handleSettlementCounterDownload"
     />
   </div>
 </template>

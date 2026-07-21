@@ -3,6 +3,7 @@ import {
   filterSystemLogs,
   filterLogByFeature,
   formatLogDateTime,
+  formatLogDurationMinutes,
   formatLogFeature,
   formatLogPageCount,
   formatLogStatus,
@@ -25,12 +26,14 @@ assert.equal(formatLogFeature('spec_tree'), 'スペックツリー');
 assert.equal(filterLogByFeature('スペック新旧比較', { feature: '条項比較' }), true);
 assert.equal(filterLogByFeature('スペックツリー', { feature: '条項比較' }), false);
 assert.equal(formatLogDateTime('2026-06-30T10:00:00'), '2026-06-30 10:00:00');
+assert.equal(formatLogDurationMinutes({ durationMinutes: 18 }), 18);
 assert.equal(formatLogTarget({ note: 'M000378.pdf', detail: 'ツリー作成' }), 'M000378.pdf');
 assert.equal(formatLogTarget({ note: '', detail: '差分抽出' }), '差分抽出');
 assert.equal(formatLogStatus({ actionType: 'タスク開始' }), '処理中');
 assert.equal(formatLogStatus({ actionType: 'タスク完了' }), '成功');
 assert.equal(formatLogStatus({ actionType: 'タスク中止' }), '中止');
 assert.equal(formatLogPageCount({ pages: 86 }), 86);
+assert.equal(formatLogPageCount({ actionType: 'タスク失敗', pages: 18 }), 0);
 assert.equal(formatLogTotalPageCount({ pages: 42, totalPages: 118 }), 118);
 assert.equal(isUsageLog({ feature: 'スペックツリー', actionType: 'タスク開始', pages: 0, totalPages: 92 }), false);
 assert.equal(isUsageLog({ feature: 'システム', actionType: 'License更换', pages: 0, totalPages: 0 }), false);
@@ -44,6 +47,7 @@ const sampleLogs = [
     feature: '条項比較',
     actionType: 'タスク完了',
     note: 'AMS2750E.pdf;AMS2750F.pdf',
+    durationMinutes: 18,
     pages: 86,
     totalPages: 86,
   },
@@ -54,6 +58,7 @@ const sampleLogs = [
     feature: 'スペックツリー',
     actionType: 'タスク完了',
     note: 'M000388.pdf',
+    durationMinutes: 21,
     pages: 92,
     totalPages: 92,
   },
@@ -64,6 +69,7 @@ const sampleLogs = [
     feature: '条項比較',
     actionType: 'タスク中止',
     note: 'AMS5510J.pdf;AMS5510K.pdf',
+    durationMinutes: 9,
     pages: 42,
     totalPages: 118,
   },
@@ -82,7 +88,7 @@ const sampleLogs = [
 assert.deepEqual(
   filterSystemLogs(sampleLogs, {
     dateRange: ['2026-06-30', '2026-06-30'],
-    keyword: 'ams2750',
+    keyword: '18',
     feature: 'スペック新旧比較',
   }).map((log) => log.note),
   ['AMS2750E.pdf;AMS2750F.pdf'],

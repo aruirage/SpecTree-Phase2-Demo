@@ -4,6 +4,7 @@ import net from 'node:net';
 import { spawn } from 'node:child_process';
 import test from 'node:test';
 import ExcelJS from 'exceljs';
+import JSZip from 'jszip';
 
 async function getAvailablePort() {
   const server = net.createServer();
@@ -183,6 +184,27 @@ test('job cancel stops the backing mock session', async (t) => {
   assert.equal(body.code, 499);
 });
 
+test('license exports a separate encrypted settlement counter file', async (t) => {
+  const baseUrl = await startBackend(t);
+
+  const exportRes = await fetch(`${baseUrl}/api/license/settlement-counter/export`);
+  assert.equal(exportRes.status, 200);
+  assert.equal(exportRes.headers.get('content-type'), 'application/octet-stream');
+  assert.match(
+    exportRes.headers.get('content-disposition') || '',
+    /settlement_counter_TOKYO-01_\d{12}\.enc/,
+  );
+
+  const envelope = JSON.parse(Buffer.from(await exportRes.arrayBuffer()).toString('utf-8'));
+  assert.equal(envelope.algorithm, 'MOCK-AES256-GCM+SHA256');
+  const payload = JSON.parse(Buffer.from(envelope.payload, 'base64').toString('utf-8'));
+  assert.equal(payload.fileType, 'settlement_counter');
+  assert.equal(payload.billingMetric, 'total_pages');
+  assert.equal(payload.siteCode, 'TOKYO-01');
+  assert.equal(typeof payload.chainHead, 'string');
+  assert.equal(payload.summary.totalPages > 0, true);
+});
+
 test('clause compare excel export keeps row styling separate from field diff styling', async (t) => {
   const baseUrl = await startBackend(t);
 
@@ -219,26 +241,116 @@ test('clause compare excel export keeps row styling separate from field diff sty
     exportRes.headers.get('content-type') || '',
     /^application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet/,
   );
+  assert.match(exportRes.headers.get('content-disposition') || '', /comp_AMS2750F_\d{12}\.xlsx/);
 
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(await exportRes.arrayBuffer());
   const sheet = workbook.getWorksheet('条項比較');
   assert.ok(sheet);
+  assert.equal(sheet.getCell('A1').value, '【旧】REV');
+  assert.equal(sheet.getCell('A1').font.name, 'Noto Sans JP');
+  assert.equal(sheet.getCell('D1').value, '【新】REV');
+  assert.equal(sheet.getCell('G1').value, '比較区分');
+  assert.equal(sheet.getCell('A2').value, '項');
+  assert.equal(sheet.getCell('A2').font.name, 'Noto Sans JP');
+  assert.equal(sheet.getCell('B2').value, '記載内容');
+  assert.equal(sheet.getCell('C2').value, '日本語訳（参考）');
+  assert.equal(sheet.getCell('D2').value, '項');
+  assert.equal(sheet.getCell('E2').value, '記載内容');
+  assert.equal(sheet.getCell('F2').value, '日本語訳（参考）');
 
   const deletedRow = sheet.getRow(7);
-  assert.equal(deletedRow.getCell(9).value, '削除');
+  assert.equal(deletedRow.getCell(7).value, '削除');
   assert.equal(deletedRow.getCell(2).font.strike, undefined);
   assert.equal(deletedRow.getCell(2).font.color.argb, 'FF334155');
   assert.equal(deletedRow.getCell(2).fill.fgColor.argb, 'FFE5E7EB');
 
   const addedRow = sheet.getRow(8);
-  assert.equal(addedRow.getCell(9).value, '追加');
-  assert.equal(addedRow.getCell(6).font.color.argb, 'FF334155');
-  assert.equal(addedRow.getCell(6).fill.fgColor.argb, 'FFDCFCE7');
+  assert.equal(addedRow.getCell(7).value, '追加');
+  assert.equal(addedRow.getCell(5).font.color.argb, 'FF334155');
+  assert.equal(addedRow.getCell(5).fill.fgColor.argb, 'FFE6F6D8');
 
   const changedRow = sheet.getRow(3);
-  assert.equal(changedRow.getCell(9).value, '変更');
-  assert.equal(changedRow.getCell(2).font.strike, true);
-  assert.equal(changedRow.getCell(2).font.color.argb, 'FFDC2626');
-  assert.equal(changedRow.getCell(6).font.color.argb, 'FF0076BF');
+  assert.equal(changedRow.getCell(7).value, '変更');
+  assert.equal(changedRow.getCell(2).font.name, 'Noto Sans JP');
+  assert.equal(changedRow.getCell(2).font.color.argb, 'FF334155');
+  assert.equal(changedRow.getCell(5).font.name, 'Noto Sans JP');
+  assert.equal(changedRow.getCell(5).font.color.argb, 'FF334155');
+  const oldRichText = changedRow.getCell(2).value.richText;
+  const newRichText = changedRow.getCell(5).value.richText;
+  assert.equal(Array.isArray(oldRichText), true);
+  assert.equal(Array.isArray(newRichText), true);
+  assert.equal(oldRichText[0].text, 'Furnace temperature uniformity shall be verified per Table 1.');
+  assert.equal(oldRichText[0].font.color.argb, 'FF334155');
+  assert.equal(oldRichText.some((part) => part.font.strike === true), false);
+  assert.equal(newRichText[0].text.trimEnd(), 'Furnace temperature uniformity shall be verified per Table 1');
+  assert.equal(newRichText[0].font.color.argb, 'FF334155');
+  const addedText = newRichText
+    .filter((part) => part.font.color.argb === 'FF0076BF')
+    .map((part) => part.text)
+    .join(' ');
+  assert.match(addedText, /and/);
+  assert.match(addedText, /Table/);
+  assert.match(addedText, /1A/);
+  const oldTranslationRichText = changedRow.getCell(3).value.richText;
+  const newTranslationRichText = changedRow.getCell(6).value.richText;
+  assert.equal(Array.isArray(oldTranslationRichText), true);
+  assert.equal(Array.isArray(newTranslationRichText), true);
+  assert.match(oldTranslationRichText.map((part) => part.text).join(''), /炉温/);
+  assert.match(newTranslationRichText.map((part) => part.text).join(''), /表1A/);
+
+  const imageZipRes = await fetch(`${baseUrl}/api/clause-compare/images/export?sessionId=${encodeURIComponent(oldUpload.sessionId)}`);
+  assert.equal(imageZipRes.status, 200);
+  assert.match(imageZipRes.headers.get('content-disposition') || '', /comp_AMS2750F_\d{12}\.zip/);
+  const zip = await JSZip.loadAsync(await imageZipRes.arrayBuffer());
+  assert.ok(zip.file('new/Images/新 画像1.png'));
+  assert.ok(zip.file('old/Images/旧 画像1.png'));
+});
+
+test('spec tree upload preserves Japanese filenames and exports Excel layout', async (t) => {
+  const baseUrl = await startBackend(t);
+
+  const form = new FormData();
+  form.append('files', createPdfFile('日本語_規格-Rev.C（確認用）.pdf'));
+  form.append('files', createPdfFile('別Root_対象.pdf'));
+  const upload = await readJson(await fetch(`${baseUrl}/api/spec-tree/upload`, {
+    method: 'POST',
+    body: form,
+  }));
+  assert.equal(upload.files[0].name, '日本語_規格-Rev.C（確認用）.pdf');
+  assert.equal(upload.files[1].name, '別Root_対象.pdf');
+
+  const start = await readJson(await fetch(`${baseUrl}/api/spec-tree/generate/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sessionId: upload.sessionId,
+      rootFileIds: [upload.files[1].id],
+    }),
+  }));
+
+  await pollJson(
+    `${baseUrl}/api/spec-tree/result?sessionId=${encodeURIComponent(start.jobs[0].sessionId)}`,
+    (data) => Boolean(data.mmdContent),
+  );
+
+  const exportRes = await fetch(`${baseUrl}/api/spec-tree/export?format=excel&sessionId=${encodeURIComponent(start.jobs[0].sessionId)}`);
+  assert.equal(exportRes.status, 200);
+  assert.match(
+    exportRes.headers.get('content-type') || '',
+    /^application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet/,
+  );
+  assert.match(exportRes.headers.get('content-disposition') || '', /st_.*Root.*_\d{12}\.xlsx/);
+
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(await exportRes.arrayBuffer());
+  const sheet = workbook.getWorksheet('スペックツリー');
+  assert.ok(sheet);
+  assert.equal(sheet.getCell('A1').value, 'スペックNo');
+  assert.equal(sheet.getCell('A1').font.name, 'Noto Sans JP');
+  assert.equal(sheet.getCell('B1').value, '階層');
+  assert.equal(sheet.getCell('C1').value, 'スペック名称');
+  assert.equal(sheet.getCell('D1').value, '改訂記号');
+  assert.equal(sheet.getRow(2).getCell(1).font.name, 'Noto Sans JP');
+  assert.equal(sheet.getRow(4).getCell(1).alignment.indent, 2);
 });

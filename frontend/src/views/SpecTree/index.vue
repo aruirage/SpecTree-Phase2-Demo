@@ -39,7 +39,6 @@ const activeJobId = ref('');
 const taskJobs = ref([]);
 const activeSpecTreeTab = ref('generate');
 const activeTaskStatusTab = ref('all');
-const selectedCompletedJobIds = ref([]);
 const SPEC_TREE_LABEL_WRAP_LIMIT = {
   LR: 34,
   TD: 26,
@@ -117,6 +116,11 @@ function shortenFileName(name, max = 22) {
   const base = ext ? text.slice(0, -ext.length) : text;
   const keep = Math.max(8, max - ext.length - 1);
   return `${base.slice(0, keep)}…${ext}`;
+}
+
+function formatSpecTreeResultName(fileName) {
+  const rootName = String(fileName || 'ツリー').replace(/\.[^.]+$/, '');
+  return shortenFileName(`${rootName} スペックツリー`, 28);
 }
 
 function syncRootSelectionWithFiles() {
@@ -213,7 +217,7 @@ async function onTaskSelect(job) {
     upsertTreeResultTab({
       sessionId: job.sessionId,
       rootFileId: job.rootFileId || '',
-      label: shortenFileName(job.name || job.title || 'ツリー'),
+      label: shortenFileName(job.title || job.name || 'ツリー', 28),
       closable: true,
     }, normalized);
     status.value = `タスク結果を読み込みました: 合計 ${data.nodeCount} ノード`;
@@ -783,7 +787,7 @@ async function handleGenerate() {
         return {
           sessionId: job.sessionId,
           rootFileId: job.rootFileId,
-          label: shortenFileName(uploadedFiles.value.find((f) => f.id === job.rootFileId)?.name || 'ツリー'),
+          label: formatSpecTreeResultName(uploadedFiles.value.find((f) => f.id === job.rootFileId)?.name),
           closable: true,
         };
       });
@@ -803,7 +807,6 @@ async function handleGenerate() {
     }
 
     await loadTaskJobs();
-    selectedCompletedJobIds.value = [];
   } catch (e) {
     if (requestSeq !== generateRequestSeq) return;
     error.value = formatCaughtError(e, 'スペックツリーの生成に失敗しました');
@@ -818,10 +821,8 @@ async function handleGenerate() {
 // ── Export ─────────────────────────────────────────────────────────────────
 function handleExport(format) {
   if (!activeResultSessionId.value) return;
-  const ext = format === 'excel' ? 'xlsx' : format;
   const a = document.createElement('a');
   a.href = `/api/spec-tree/export?format=${format}&sessionId=${activeResultSessionId.value}`;
-  a.download = `spec-tree.${ext}`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -935,20 +936,6 @@ const filteredTaskJobs = computed(() => {
   }
   return taskJobs.value.filter((job) => job.status === activeTaskStatusTab.value);
 });
-const completedTaskJobs = computed(() => taskJobs.value.filter((job) => job.status === 'completed' && !job.expired));
-const selectedCompletedJobs = computed(() => {
-  const selected = new Set(selectedCompletedJobIds.value);
-  return completedTaskJobs.value.filter((job) => selected.has(job.id));
-});
-const allCompletedSelected = computed(() =>
-  completedTaskJobs.value.length > 0 && selectedCompletedJobs.value.length === completedTaskJobs.value.length
-);
-const currentFactorySummary = computed(() => {
-  const job = taskJobs.value.find((item) => item.factory || item.ipAddress);
-  if (!job) return '現在のIP / 工場単位で表示';
-  return `${job.factory || '不明'} / ${job.ipAddress || 'IP未取得'}`;
-});
-
 function taskStatusMeta(status) {
   return TASK_STATUS_META[status] || { label: status || '不明', className: 'unknown' };
 }
@@ -957,45 +944,20 @@ function taskProgress(job) {
   return Math.max(0, Math.min(100, Number(job.progress) || 0));
 }
 
-function taskQueueLabel(job) {
-  if (job.status === 'completed') return '完了済み';
-  if (job.status === 'failed') return '失敗';
-  if (job.status === 'cancelled') return '中止';
-  if (!job.queuePosition) return 'キュー確認中';
-  return `全体キュー ${job.queuePosition}番目`;
-}
-
-function taskRetentionLabel(job) {
-  if (job.expired) return '保存期限切れ';
-  if (job.retentionDaysLeft === null || job.retentionDaysLeft === undefined) return '保存期限確認中';
-  return `保存期限：残り${job.retentionDaysLeft}日`;
+function globalTaskRetentionLabel() {
+  const sourceJob = taskJobs.value.find((job) => job.retentionDaysLeft !== null && job.retentionDaysLeft !== undefined);
+  if (!sourceJob) return '保存期限：確認中';
+  if (sourceJob.expired) return '保存期限切れ';
+  return `保存期限：残り${sourceJob.retentionDaysLeft}日`;
 }
 
 function canOpenTaskResult(job) {
   return job.status === 'completed' && !job.expired && Boolean(job.sessionId);
 }
 
-function toggleCompletedJobSelection(job) {
-  if (!canOpenTaskResult(job)) return;
-  const selected = new Set(selectedCompletedJobIds.value);
-  if (selected.has(job.id)) selected.delete(job.id);
-  else selected.add(job.id);
-  selectedCompletedJobIds.value = [...selected];
-}
-
-function toggleAllCompletedJobs() {
-  if (allCompletedSelected.value) {
-    selectedCompletedJobIds.value = [];
-    return;
-  }
-  selectedCompletedJobIds.value = completedTaskJobs.value.map((job) => job.id);
-}
-
-function downloadBySession(sessionId, format, title = 'spec-tree') {
-  const ext = format === 'excel' ? 'xlsx' : format;
+function downloadBySession(sessionId, format) {
   const a = document.createElement('a');
   a.href = `/api/spec-tree/export?format=${format}&sessionId=${encodeURIComponent(sessionId)}`;
-  a.download = `${title}.${ext}`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -1018,11 +980,11 @@ async function downloadTaskResult(job, format) {
     ElMessage.warning('このタスクの結果はダウンロードできません');
     return;
   }
-  const title = String(job.name || job.title || 'spec-tree').replace(/[\\/:*?"<>|]/g, '_');
   if (format === 'excel' || format === 'csv') {
-    downloadBySession(job.sessionId, format, title);
+    downloadBySession(job.sessionId, format);
     return;
   }
+  const title = String(job.name || job.title || 'spec-tree').replace(/[\\/:*?"<>|]/g, '_');
   const data = await loadSpecTreeResult(job.sessionId);
   if (!data?.mmdContent) {
     ElMessage.warning('このタスクのツリー内容を取得できませんでした');
@@ -1046,21 +1008,6 @@ async function handleTaskDownloadCommand(command) {
     await downloadTaskResult(job, format);
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : 'ダウンロードに失敗しました');
-  }
-}
-
-async function handleBulkDownloadCommand(format) {
-  if (selectedCompletedJobs.value.length === 0) {
-    ElMessage.warning('完了タスクを選択してください');
-    return;
-  }
-  try {
-    for (const job of selectedCompletedJobs.value) {
-      await downloadTaskResult(job, format);
-    }
-    ElMessage.success(`${selectedCompletedJobs.value.length}件のダウンロードを開始しました`);
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '一括ダウンロードに失敗しました');
   }
 }
 
@@ -1505,7 +1452,7 @@ watch(rootFileIds, () => {
                 <span class="excel-current">現在: {{ excelSupplementName || 'なし' }}</span>
               </div>
               <button type="button" class="btn btn-outline btn-sm excel-button" :disabled="!canUpload" @click="supplementInputRef?.click()">
-                変更
+                {{ excelSupplementName ? '変更' : 'アップロード' }}
               </button>
               <input ref="supplementInputRef" type="file" accept=".xlsx,.xls,.csv" style="display:none" @change="onSupplementExcelChange" />
             </div>
@@ -1520,7 +1467,7 @@ watch(rootFileIds, () => {
                 <span class="excel-current">現在: {{ excelDeletionName || 'なし' }}</span>
               </div>
               <button type="button" class="btn btn-outline btn-sm excel-button" :disabled="!canUpload" @click="deletionInputRef?.click()">
-                変更
+                {{ excelDeletionName ? '変更' : 'アップロード' }}
               </button>
               <input ref="deletionInputRef" type="file" accept=".xlsx,.xls,.csv" style="display:none" @change="onDeletionExcelChange" />
             </div>
@@ -1606,11 +1553,13 @@ watch(rootFileIds, () => {
                 <line x1="8" y1="11" x2="14" y2="11" />
               </svg>
             </button>
-            <button class="btn btn-outline btn-icon" title="ビューをリセット" @click="resetView">
+            <button class="btn btn-outline btn-icon" title="画面に合わせる" @click="fitToView">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="15,3 21,3 21,9" />
-                <polyline points="9,21 3,21 3,15" />
-                <path d="M21 3l-7 7M3 21l7-7" />
+                <path d="M8 3H5a2 2 0 0 0-2 2v3" />
+                <path d="M16 3h3a2 2 0 0 1 2 2v3" />
+                <path d="M21 16v3a2 2 0 0 1-2 2h-3" />
+                <path d="M8 21H5a2 2 0 0 1-2-2v-3" />
+                <path d="M9 9h6v6H9z" />
               </svg>
             </button>
             <!-- Direction toggle - same group as zoom controls -->
@@ -1712,62 +1661,20 @@ watch(rootFileIds, () => {
     </div>
 
     <section v-else class="task-management-page">
-      <div class="task-page-header">
-        <div>
-          <h2 class="task-page-title">スペックツリー タスク管理</h2>
-          <p class="task-page-subtitle">現在のIP / 工場単位で生成タスクを確認します：{{ currentFactorySummary }}</p>
-        </div>
-        <div class="task-page-actions">
-          <button type="button" class="btn btn-secondary btn-sm" @click="loadTaskJobs">
-            更新
-          </button>
-          <el-dropdown
-            trigger="click"
-            :disabled="selectedCompletedJobs.length === 0"
-            @command="handleBulkDownloadCommand"
+      <div class="task-toolbar">
+        <div class="task-status-tabs">
+          <button
+            v-for="tab in SPEC_TREE_TASK_STATUS_TABS"
+            :key="tab.key"
+            type="button"
+            class="task-status-tab"
+            :class="{ active: activeTaskStatusTab === tab.key }"
+            @click="activeTaskStatusTab = tab.key"
           >
-            <button class="btn btn-primary btn-sm" :disabled="selectedCompletedJobs.length === 0">
-              選択した結果を一括ダウンロード
-              <svg class="icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="6,9 12,15 18,9" />
-              </svg>
-            </button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item command="excel">Excelエクスポート</el-dropdown-item>
-                <el-dropdown-item command="csv">CSVエクスポート</el-dropdown-item>
-                <el-dropdown-item command="mmd" divided>MMDダウンロード</el-dropdown-item>
-                <el-dropdown-item command="image">SVGダウンロード</el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
+            {{ tab.label }}
+          </button>
         </div>
-      </div>
-
-      <div class="task-status-tabs">
-        <button
-          v-for="tab in SPEC_TREE_TASK_STATUS_TABS"
-          :key="tab.key"
-          type="button"
-          class="task-status-tab"
-          :class="{ active: activeTaskStatusTab === tab.key }"
-          @click="activeTaskStatusTab = tab.key"
-        >
-          {{ tab.label }}
-        </button>
-      </div>
-
-      <div v-if="activeTaskStatusTab === 'completed'" class="completed-select-bar">
-        <label class="completed-select-all">
-          <input
-            type="checkbox"
-            :checked="allCompletedSelected"
-            :disabled="completedTaskJobs.length === 0"
-            @change="toggleAllCompletedJobs"
-          />
-          完了タスクをすべて選択
-        </label>
-        <span>{{ selectedCompletedJobs.length }} / {{ completedTaskJobs.length }} 件選択中</span>
+        <span class="task-retention-global">{{ globalTaskRetentionLabel() }}</span>
       </div>
 
       <div class="task-list">
@@ -1780,14 +1687,6 @@ watch(rootFileIds, () => {
           class="task-row"
           :class="{ active: activeJobId === job.id, expired: job.expired }"
         >
-          <label class="task-checkbox" :class="{ disabled: !canOpenTaskResult(job) }">
-            <input
-              type="checkbox"
-              :checked="selectedCompletedJobIds.includes(job.id)"
-              :disabled="!canOpenTaskResult(job)"
-              @change="toggleCompletedJobSelection(job)"
-            />
-          </label>
           <div class="task-main">
             <div class="task-row-top">
               <span class="task-status-badge" :class="taskStatusMeta(job.status).className">
@@ -1801,9 +1700,7 @@ watch(rootFileIds, () => {
             </div>
             <div class="task-row-meta">
               <span>{{ taskProgress(job) }}%</span>
-              <span>{{ taskQueueLabel(job) }}</span>
-              <span>{{ job.factory || '不明' }} / {{ job.ipAddress || 'IP未取得' }}</span>
-              <span>{{ taskRetentionLabel(job) }}</span>
+              <span>IP：{{ job.ipAddress || '未取得' }}</span>
               <span>{{ job.timeLabel }}</span>
             </div>
           </div>
@@ -1838,14 +1735,30 @@ watch(rootFileIds, () => {
               @command="handleTaskDownloadCommand"
             >
               <button class="btn btn-primary btn-sm" :disabled="!canOpenTaskResult(job)">
+                <svg class="icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7,10 12,15 17,10" />
+                  <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
                 ダウンロード
+                <svg class="icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="6,9 12,15 18,9" />
+                </svg>
               </button>
               <template #dropdown>
                 <el-dropdown-menu>
-                  <el-dropdown-item :command="`${job.id}:excel`">Excelエクスポート</el-dropdown-item>
-                  <el-dropdown-item :command="`${job.id}:csv`">CSVエクスポート</el-dropdown-item>
-                  <el-dropdown-item :command="`${job.id}:mmd`" divided>MMDダウンロード</el-dropdown-item>
-                  <el-dropdown-item :command="`${job.id}:image`">SVGダウンロード</el-dropdown-item>
+                  <el-dropdown-item :command="`${job.id}:excel`">
+                    <span class="download-menu-item">Excelエクスポート</span>
+                  </el-dropdown-item>
+                  <el-dropdown-item :command="`${job.id}:csv`">
+                    <span class="download-menu-item">CSVエクスポート</span>
+                  </el-dropdown-item>
+                  <el-dropdown-item :command="`${job.id}:mmd`" divided>
+                    <span class="download-menu-item">MMDダウンロード</span>
+                  </el-dropdown-item>
+                  <el-dropdown-item :command="`${job.id}:image`">
+                    <span class="download-menu-item">SVGダウンロード</span>
+                  </el-dropdown-item>
                 </el-dropdown-menu>
               </template>
             </el-dropdown>
@@ -2517,39 +2430,26 @@ watch(rootFileIds, () => {
   background: #f5f7fa;
 }
 
-.task-page-header {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 16px;
-  padding-bottom: 14px;
-  border-bottom: 1px solid #e2e8f0;
-}
-
-.task-page-title {
-  margin: 0 0 4px;
-  font-size: var(--font-size-page-title);
-  font-weight: 700;
-  color: #1e293b;
-}
-
-.task-page-subtitle {
-  margin: 0;
-  font-size: 13px;
-  color: #64748b;
-}
-
-.task-page-actions {
+.task-toolbar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
 }
 
 .task-status-tabs {
   display: flex;
   gap: 6px;
-  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.task-retention-global {
+  flex-shrink: 0;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .task-status-tab {
@@ -2575,26 +2475,6 @@ watch(rootFileIds, () => {
   }
 }
 
-.completed-select-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 10px;
-  padding: 10px 12px;
-  border: 1px solid #dbe3ee;
-  border-radius: 6px;
-  background: #ffffff;
-  color: #475569;
-  font-size: 13px;
-}
-
-.completed-select-all {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 600;
-}
-
 .task-list {
   display: flex;
   flex-direction: column;
@@ -2613,7 +2493,7 @@ watch(rootFileIds, () => {
 
 .task-row {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
   padding: 14px;
@@ -2629,15 +2509,6 @@ watch(rootFileIds, () => {
 
   &.expired {
     opacity: 0.68;
-  }
-}
-
-.task-checkbox {
-  display: inline-flex;
-  justify-content: center;
-
-  &.disabled {
-    opacity: 0.4;
   }
 }
 

@@ -9,6 +9,7 @@ import {
 import {
   filterSystemLogs,
   formatLogDateTime,
+  formatLogDurationMinutes,
   formatLogFeature,
   formatLogPageCount,
   formatLogStatus,
@@ -95,12 +96,23 @@ onMounted(async () => {
   setInterval(loadSystemStatus, 5000);
 });
 
-const processedPages = computed(() => {
-  return filteredLogs.value.reduce((sum, log) => sum + formatLogPageCount(log), 0);
+const factoryLogs = computed(() => {
+  const factory = factoryInfo.value?.factory;
+  if (!factory || factory === '不明') return [];
+  return filteredLogs.value.filter((log) => log.site === factory);
 });
 
-const totalPages = computed(() => {
+const factoryPages = computed(() => {
+  return factoryLogs.value.reduce((sum, log) => sum + formatLogTotalPageCount(log), 0);
+});
+
+const allFactoryPages = computed(() => {
   return filteredLogs.value.reduce((sum, log) => sum + formatLogTotalPageCount(log), 0);
+});
+
+const factoryShare = computed(() => {
+  if (!allFactoryPages.value) return 0;
+  return Math.round((factoryPages.value / allFactoryPages.value) * 1000) / 10;
 });
 
 const filteredLogs = computed(() => filterSystemLogs(logs.value, appliedFilters.value));
@@ -158,31 +170,24 @@ function handleSortChange({ prop, order }) {
 
       <div class="stats-cards">
         <div class="stat-card">
-          <div class="stat-label">処理ページ数</div>
+          <div class="stat-label">本工場の処理数</div>
           <div class="stat-number">
-            <span class="stat-value">{{ processedPages }}</span>
+            <span class="stat-value">{{ factoryPages }}</span>
             <span class="stat-unit">ページ</span>
           </div>
         </div>
         <div class="stat-card">
-          <div class="stat-label">総ページ数</div>
+          <div class="stat-label">全工場の処理数</div>
           <div class="stat-number">
-            <span class="stat-value">{{ totalPages }}</span>
+            <span class="stat-value">{{ allFactoryPages }}</span>
             <span class="stat-unit">ページ</span>
           </div>
         </div>
-        <div class="stat-card" v-if="queueStatus">
-          <div class="stat-label">待ちタスク</div>
+        <div class="stat-card">
+          <div class="stat-label">全体比率</div>
           <div class="stat-number">
-            <span class="stat-value">{{ queueStatus.queued }}</span>
-            <span class="stat-unit">件</span>
-          </div>
-        </div>
-        <div class="stat-card" v-if="queueStatus">
-          <div class="stat-label">実行中</div>
-          <div class="stat-number">
-            <span class="stat-value">{{ queueStatus.running }}</span>
-            <span class="stat-unit">件</span>
+            <span class="stat-value">{{ factoryShare }}</span>
+            <span class="stat-unit">%</span>
           </div>
         </div>
       </div>
@@ -217,14 +222,6 @@ function handleSortChange({ prop, order }) {
           value-format="YYYY-MM-DD"
           clearable
         />
-        <el-input
-          v-model="filterForm.keyword"
-          class="filter-keyword"
-          style="width: 190px"
-          placeholder="キーワード"
-          clearable
-          @keyup.enter="handleSearch"
-        />
         <el-select
           v-model="filterForm.feature"
           class="filter-feature"
@@ -239,6 +236,14 @@ function handleSortChange({ prop, order }) {
             :value="item.value"
           />
         </el-select>
+        <el-input
+          v-model="filterForm.keyword"
+          class="filter-keyword"
+          style="width: 190px"
+          placeholder="キーワード"
+          clearable
+          @keyup.enter="handleSearch"
+        />
         <button class="btn btn-primary btn-icon-only" title="検索" aria-label="検索" @click="handleSearch">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-sm">
             <circle cx="11" cy="11" r="8"/>
@@ -269,6 +274,15 @@ function handleSortChange({ prop, order }) {
         >
           <template #default="{ row }">
             {{ formatLogDateTime(row.at) }}
+          </template>
+        </el-table-column>
+        <el-table-column
+          prop="durationMinutes"
+          label="処理時間"
+          min-width="120"
+        >
+          <template #default="{ row }">
+            <span class="pages-count">{{ formatLogDurationMinutes(row) }} 分</span>
           </template>
         </el-table-column>
         <el-table-column
@@ -426,7 +440,7 @@ function handleSortChange({ prop, order }) {
 
 .overview-section {
   display: grid;
-  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 16px;
   align-items: stretch;
   margin-bottom: 24px;
@@ -469,8 +483,7 @@ function handleSortChange({ prop, order }) {
 }
 
 .stats-cards {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  display: contents;
   gap: 16px;
 }
 
@@ -490,16 +503,12 @@ function handleSortChange({ prop, order }) {
 
 @media (max-width: 1180px) {
   .overview-section {
-    grid-template-columns: 1fr;
-  }
-
-  .stats-cards {
     grid-template-columns: repeat(2, minmax(180px, 1fr));
   }
 }
 
 @media (max-width: 720px) {
-  .stats-cards {
+  .overview-section {
     grid-template-columns: 1fr;
   }
 }
@@ -529,6 +538,13 @@ function handleSortChange({ prop, order }) {
 
 .stat-unit {
   font-size: clamp(12px, 0.9vw, 14px);
+  line-height: 1.2;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.stat-meta {
+  font-size: var(--font-size-caption);
   line-height: 1.2;
   color: #64748b;
   white-space: nowrap;

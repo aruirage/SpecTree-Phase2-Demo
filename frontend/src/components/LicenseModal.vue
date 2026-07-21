@@ -4,7 +4,7 @@ defineProps({
   license: { type: Object, default: () => ({}) },
 });
 
-const emit = defineEmits(['close', 'upload', 'export-csv', 'export-audit']);
+const emit = defineEmits(['close', 'upload', 'download-settlement-counter']);
 </script>
 
 <template>
@@ -37,6 +37,15 @@ const emit = defineEmits(['close', 'upload', 'export-csv', 'export-audit']);
           <div class="license-modal__actions">
             <button type="button" class="btn btn-primary" @click="emit('upload')">
               License ファイルをアップロード
+            </button>
+            <button type="button" class="btn btn-secondary" @click="emit('download-settlement-counter')">
+              <svg class="btn__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7,10 12,15 17,10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+                <path d="M16 6V5a4 4 0 0 0-8 0v1" />
+              </svg>
+              精算用カウントファイルをダウンロード
             </button>
           </div>
 
@@ -142,6 +151,7 @@ const emit = defineEmits(['close', 'upload', 'export-csv', 'export-audit']);
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 6px;
   padding: 9px 16px;
   border-radius: var(--radius-sm);
   font-size: var(--font-size-base);
@@ -172,5 +182,11 @@ const emit = defineEmits(['close', 'upload', 'export-csv', 'export-audit']);
   &-muted {
     color: var(--color-text-secondary);
   }
+}
+
+.btn__icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
 }
 </style>

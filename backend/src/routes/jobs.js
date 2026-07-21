@@ -10,6 +10,8 @@ import {
   nextId,
   normalizeClientIP,
   refreshWorkQueue,
+  resolveRunDurationMinutes,
+  resolveTaskTarget,
   store,
 } from '../store.js';
 
@@ -169,9 +171,10 @@ router.post('/:id/cancel', (req, res) => {
     feature: job.type === 'spec_tree' ? 'スペックツリー' : '条項比較',
     pages: job.type === 'spec_tree' ? Math.max(1, Math.round(124 * ((job.progress || 35) / 100))) : Math.max(1, Math.round(86 * ((job.progress || 35) / 100))),
     totalPages: job.type === 'spec_tree' ? 124 : 86,
+    durationMinutes: resolveRunDurationMinutes(session?.run?.startedAt || Date.parse(job.updatedAt || job.createdAt)),
     detail: job.type === 'spec_tree' ? 'ツリー作成' : '差分抽出',
     operator: 'demo-user',
-    note: job.title,
+    note: resolveTaskTarget({ type: job.type, files: getTaskFiles(job, session) }, job.title),
   });
   res.json(enrichJob(job, getClientContext(req), getQueuePositions(job.type)));
 });

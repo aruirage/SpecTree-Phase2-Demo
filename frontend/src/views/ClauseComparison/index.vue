@@ -381,10 +381,8 @@ function createClientRunId() {
 // ── Export ─────────────────────────────────────────────────────────────────
 function handleExport(format) {
   if (!sharedSessionId.value) return;
-  const ext = format === 'excel' ? 'xlsx' : 'csv';
   const a   = document.createElement('a');
   a.href     = `/api/clause-compare/export?format=${format}&sessionId=${sharedSessionId.value}`;
-  a.download = `clause-comparison.${ext}`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -404,7 +402,6 @@ function handleExportImages() {
   if (!sharedSessionId.value) return;
   const a = document.createElement('a');
   a.href = `/api/clause-compare/images/export?sessionId=${sharedSessionId.value}`;
-  a.download = 'clause-comparison-images.zip';
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -481,13 +478,22 @@ function contentSegments(clause, side) {
   if (!detailedChangeTypesEnabled.value || normalizeChangeStatus(clause) !== '変更' || !clause.oldContent || !clause.newContent) {
     return [{ text, type: 'same' }];
   }
-  return getDiffSegments(clause)[side];
+  return getDiffSegments(clause, 'content', clause.oldContent, clause.newContent)[side];
 }
 
-function getDiffSegments(clause) {
-  const oldText = String(clause.oldContent || '');
-  const newText = String(clause.newContent || '');
-  const key = `${clause.id || clause.clauseNumber}:${oldText}\u0000${newText}`;
+function translationSegments(clause, side) {
+  const text = side === 'old' ? clause.oldTranslation : clause.newTranslation;
+  if (!text) return [];
+  if (!detailedChangeTypesEnabled.value || normalizeChangeStatus(clause) !== '変更' || !clause.oldTranslation || !clause.newTranslation) {
+    return [{ text, type: 'same' }];
+  }
+  return getDiffSegments(clause, 'translation', clause.oldTranslation, clause.newTranslation)[side];
+}
+
+function getDiffSegments(clause, field, oldValue, newValue) {
+  const oldText = String(oldValue || '');
+  const newText = String(newValue || '');
+  const key = `${field}:${clause.id || clause.clauseNumber}:${oldText}\u0000${newText}`;
   if (!diffSegmentCache.has(key)) {
     diffSegmentCache.set(key, buildTokenDiffSegments(oldText, newText));
   }
@@ -628,6 +634,12 @@ const displayedClauses = computed(() => {
 });
 
 const displayedClauseTotal = computed(() => filteredClauses.value.length);
+const addedClauseCount = computed(() => {
+  return result.value?.clauses?.filter((clause) => normalizeChangeStatus(clause) === '追加').length || 0;
+});
+const deletedClauseCount = computed(() => {
+  return result.value?.clauses?.filter((clause) => normalizeChangeStatus(clause) === '削除').length || 0;
+});
 
 function loadMoreClauses() {
   if (visibleClauseCount.value >= displayedClauseTotal.value) return;
@@ -990,6 +1002,8 @@ onBeforeUnmount(() => {
           <template v-if="result">
             <span class="badge badge-secondary">合計 {{ result.totalClauses }} 件</span>
             <span class="badge badge-changed">変更 {{ result.changedClauses }} 件</span>
+            <span class="badge badge-added">追加 {{ addedClauseCount }} 件</span>
+            <span class="badge badge-deleted">削除 {{ deletedClauseCount }} 件</span>
             <span v-if="activeStatusFilter !== 'all'" class="badge badge-secondary">表示 {{ displayedClauseTotal }} 件</span>
           </template>
         </div>
@@ -1178,7 +1192,14 @@ onBeforeUnmount(() => {
                 </td>
 
                 <td class="cell-translation">
-                  <span v-if="clause.oldTranslation">{{ clause.oldTranslation }}</span>
+                  <span v-if="clause.oldTranslation">
+                    <span
+                      v-for="(segment, i) in translationSegments(clause, 'old')"
+                      :key="`old-translation-${i}`"
+                      :class="segment.type !== 'same' ? `diff-${segment.type}` : ''"
+                      class="diff-segment"
+                    >{{ segment.text }}</span>
+                  </span>
                   <span v-else class="cell-empty">—</span>
                 </td>
 
@@ -1222,7 +1243,14 @@ onBeforeUnmount(() => {
                 </td>
 
                 <td class="cell-translation">
-                  <span v-if="clause.newTranslation">{{ clause.newTranslation }}</span>
+                  <span v-if="clause.newTranslation">
+                    <span
+                      v-for="(segment, i) in translationSegments(clause, 'new')"
+                      :key="`new-translation-${i}`"
+                      :class="segment.type !== 'same' ? `diff-${segment.type}` : ''"
+                      class="diff-segment"
+                    >{{ segment.text }}</span>
+                  </span>
                   <span v-else class="cell-empty">—</span>
                 </td>
 
@@ -1893,6 +1921,16 @@ tr:hover td { filter: brightness(0.97); }
 .badge-changed {
   background: rgba(234,88,12,0.12);
   color: #9a3412;
+}
+
+.badge-added {
+  background: #e6f6d8;
+  color: #3f7b1f;
+}
+
+.badge-deleted {
+  background: #e5e7eb;
+  color: #475569;
 }
 
 /* ── Image thumbnails — horizontal row ───────────────────────────────────── */

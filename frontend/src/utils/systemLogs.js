@@ -17,11 +17,16 @@ export function formatLogDateTime(value) {
   return String(value || '').replace('T', ' ');
 }
 
+export function formatLogDurationMinutes(row) {
+  return Number(row?.durationMinutes) || 0;
+}
+
 export function formatLogTarget(row) {
   return row?.note || row?.detail || '-';
 }
 
 export function formatLogPageCount(row) {
+  if (formatLogStatus(row) === '失敗') return 0;
   return Number(row?.pages) || 0;
 }
 
@@ -91,6 +96,7 @@ export function filterSystemLogs(logs, filters = {}) {
       log?.ipAddress,
       log?.site,
       formatLogFeature(log?.feature),
+      formatLogDurationMinutes(log),
       formatLogTarget(log),
       formatLogPageCount(log),
       formatLogTotalPageCount(log),

@@ -21,6 +21,15 @@ function resolveTotalPages(event) {
   return Number(event.totalPages ?? event.pages) || 0;
 }
 
+function resolveProcessedPages(event) {
+  if (resolveResult(event) === '失敗') return 0;
+  return Number(event.pages) || 0;
+}
+
+function resolveDurationMinutes(event) {
+  return Number(event.durationMinutes) || 0;
+}
+
 function isUsageEvent(event) {
   const feature = formatFeature(event.feature);
   if (feature !== 'スペックツリー' && feature !== 'スペック新旧比較') return false;
@@ -59,14 +68,15 @@ router.get('/export', (req, res) => {
   }
 
   const events = store.systemEvents.filter(isUsageEvent);
-  const header = '利用日時,IPアドレス,工場・拠点,機能,操作対象,処理ページ数,総ページ数,処理結果';
+  const header = '利用日時,処理時間（分）,IPアドレス,工場・拠点,機能,操作対象,処理ページ数,総ページ数,処理結果';
   const rows = events.map((e) => [
     e.at,
+    resolveDurationMinutes(e),
     e.ipAddress || '',
     e.site,
     formatFeature(e.feature),
     e.note || e.detail || '',
-    e.pages,
+    resolveProcessedPages(e),
     resolveTotalPages(e),
     resolveResult(e),
   ].join(','));
