@@ -234,12 +234,11 @@ function handleSortChange({ prop, order }) {
             :value="item.value"
           />
         </el-select>
-        <button class="btn btn-primary" @click="handleSearch">
+        <button class="btn btn-primary btn-icon-only" title="検索" aria-label="検索" @click="handleSearch">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-sm">
             <circle cx="11" cy="11" r="8"/>
             <line x1="21" y1="21" x2="16.65" y2="16.65"/>
           </svg>
-          検索
         </button>
         <button class="btn btn-outline btn-icon-only" title="リセット" aria-label="リセット" @click="handleReset">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" class="icon-sm">
