@@ -399,32 +399,62 @@ function createClientRunId() {
 }
 
 // ── Export ─────────────────────────────────────────────────────────────────
-function handleExport(format) {
-  if (!sharedSessionId.value) return;
-  const a   = document.createElement('a');
-  a.href     = `/api/clause-compare/export?format=${format}&sessionId=${sharedSessionId.value}`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
+function filenameFromContentDisposition(disposition, fallbackName) {
+  const encodedMatch = String(disposition || '').match(/filename\*=UTF-8''([^;]+)/i);
+  if (encodedMatch?.[1]) return decodeURIComponent(encodedMatch[1]);
+  const quotedMatch = String(disposition || '').match(/filename="([^"]+)"/i);
+  if (quotedMatch?.[1]) return quotedMatch[1];
+  return fallbackName;
 }
 
-function handleDownloadCommand(command) {
-  if (command === 'excel' || command === 'csv') {
-    handleExport(command);
-    return;
+async function downloadFile(endpoint, fallbackName) {
+  const res = await fetch(endpoint, { cache: 'no-store' });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    const message = data.error === 'no result'
+      ? 'このタスクの結果はまだダウンロードできません'
+      : data.error || `ダウンロードに失敗しました (${res.status})`;
+    throw new Error(message);
   }
-  if (command === 'images') {
-    handleExportImages();
-  }
-}
-
-function handleExportImages() {
-  if (!sharedSessionId.value) return;
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = `/api/clause-compare/images/export?sessionId=${sharedSessionId.value}`;
+  a.href = url;
+  a.download = filenameFromContentDisposition(res.headers.get('content-disposition'), fallbackName);
   document.body.appendChild(a);
   a.click();
-  document.body.removeChild(a);
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function handleExport(format) {
+  if (!sharedSessionId.value) return;
+  await downloadFile(
+    `/api/clause-compare/export?format=${encodeURIComponent(format)}&sessionId=${encodeURIComponent(sharedSessionId.value)}`,
+    `clause-compare.${format === 'excel' ? 'xlsx' : 'csv'}`,
+  );
+}
+
+async function handleDownloadCommand(command) {
+  try {
+    if (command === 'excel' || command === 'csv') {
+      await handleExport(command);
+      return;
+    }
+    if (command === 'images') {
+      await handleExportImages();
+    }
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : 'ダウンロードに失敗しました');
+  }
+}
+
+async function handleExportImages() {
+  if (!sharedSessionId.value) return;
+  await downloadFile(
+    `/api/clause-compare/images/export?sessionId=${encodeURIComponent(sharedSessionId.value)}`,
+    'clause-compare-images.zip',
+  );
 }
 
 async function loadTaskJobs() {
@@ -505,26 +535,29 @@ async function onTaskStop(job) {
   }
 }
 
-function downloadTaskResult(job, format) {
+async function downloadTaskResult(job, format) {
   if (!canOpenTaskResult(job)) {
     ElMessage.warning('このタスクの結果はダウンロードできません');
     return;
   }
-  const a = document.createElement('a');
   const endpoint = format === 'images'
     ? `/api/clause-compare/images/export?sessionId=${encodeURIComponent(job.sessionId)}`
     : `/api/clause-compare/export?format=${encodeURIComponent(format)}&sessionId=${encodeURIComponent(job.sessionId)}`;
-  a.href = endpoint;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
+  const fallbackName = format === 'images'
+    ? 'clause-compare-images.zip'
+    : `clause-compare.${format === 'excel' ? 'xlsx' : 'csv'}`;
+  await downloadFile(endpoint, fallbackName);
 }
 
-function handleTaskDownloadCommand(command) {
+async function handleTaskDownloadCommand(command) {
   const [jobId, format] = String(command).split(':');
   const job = taskJobs.value.find((item) => item.id === jobId);
   if (!job || !format) return;
-  downloadTaskResult(job, format);
+  try {
+    await downloadTaskResult(job, format);
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : 'ダウンロードに失敗しました');
+  }
 }
 
 async function toggleResultFullscreen() {

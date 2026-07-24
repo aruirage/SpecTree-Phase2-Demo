@@ -307,6 +307,23 @@ test('clause compare excel export keeps row styling separate from field diff sty
   assert.ok(zip.file('old/Images/旧 画像1.png'));
 });
 
+test('completed clause compare history jobs always have downloadable exports', async (t) => {
+  const baseUrl = await startBackend(t);
+
+  await new Promise((resolve) => setTimeout(resolve, 3600));
+  const history = await readJson(await fetch(`${baseUrl}/api/jobs?type=clause_compare&scope=history`));
+  const completedJobs = history.jobs.filter((job) => job.status === 'completed');
+  assert.equal(completedJobs.length > 0, true);
+
+  for (const job of completedJobs) {
+    const excelRes = await fetch(`${baseUrl}/api/clause-compare/export?format=excel&sessionId=${encodeURIComponent(job.sessionId)}`);
+    assert.equal(excelRes.status, 200, `${job.id} excel export should be downloadable`);
+
+    const imageZipRes = await fetch(`${baseUrl}/api/clause-compare/images/export?sessionId=${encodeURIComponent(job.sessionId)}`);
+    assert.equal(imageZipRes.status, 200, `${job.id} image export should be downloadable`);
+  }
+});
+
 test('spec tree upload preserves Japanese filenames and exports Excel layout', async (t) => {
   const baseUrl = await startBackend(t);
 
