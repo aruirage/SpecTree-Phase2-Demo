@@ -2,6 +2,7 @@
 import { ref, computed, nextTick, onBeforeUnmount, onMounted, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useJobProgress } from '@/composables/useJobProgress';
+import { fetchJobsByType, cancelJob, rerunJob, loadClauseCompareResult } from '@/api/jobs';
 
 defineOptions({ name: 'ClauseComparison' });
 
@@ -16,6 +17,20 @@ const CLAUSE_PROGRESS_STAGES = {
   packaging: { value: 94, cap: 98, label: '結果を準備中...' },
   succeeded: { value: 98, cap: 99, label: '結果を準備中...' },
 };
+const CLAUSE_TASK_STATUS_TABS = [
+  { key: 'all', label: 'すべて' },
+  { key: 'queued', label: '待機中' },
+  { key: 'running', label: '実行中' },
+  { key: 'completed', label: '完了' },
+  { key: 'stopped', label: '失敗 / 中止' },
+];
+const TASK_STATUS_META = {
+  queued: { label: '待機中', className: 'queued' },
+  running: { label: '実行中', className: 'running' },
+  completed: { label: '完了', className: 'completed' },
+  failed: { label: '失敗', className: 'failed' },
+  cancelled: { label: '中止', className: 'cancelled' },
+};
 
 // ── State ──────────────────────────────────────────────────────────────────
 const oldFile      = ref(null);
@@ -29,6 +44,10 @@ const error        = ref('');
 const running      = ref(false);
 const stoppingRun  = ref(false);
 const activeStatusFilter = ref('all');
+const activeClauseTab = ref('compare');
+const activeTaskStatusTab = ref('all');
+const taskJobs = ref([]);
+const activeTaskJobId = ref('');
 const resultFullscreen = ref(false);
 
 const contentAreaRef = ref(null);
@@ -60,6 +79,7 @@ const CLAUSE_COMPARE_RECOVERY_KEY = 'daikin:clause-compare:recovery:v1';
 let runAbortController = null;
 let runRequestSeq = 0;
 let activeRunId = null;
+let taskRefreshTimer = null;
 const {
   progress: runProgress,
   label: runProgressLabel,
@@ -405,6 +425,106 @@ function handleExportImages() {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
+}
+
+async function loadTaskJobs() {
+  try {
+    taskJobs.value = await fetchJobsByType('clause_compare');
+  } catch (e) {
+    console.warn('clause jobs load failed', e);
+  }
+}
+
+const filteredTaskJobs = computed(() => {
+  if (activeTaskStatusTab.value === 'all') return taskJobs.value;
+  if (activeTaskStatusTab.value === 'stopped') {
+    return taskJobs.value.filter((job) => job.status === 'failed' || job.status === 'cancelled');
+  }
+  return taskJobs.value.filter((job) => job.status === activeTaskStatusTab.value);
+});
+
+function taskStatusMeta(status) {
+  return TASK_STATUS_META[status] || { label: status || '不明', className: 'unknown' };
+}
+
+function taskProgress(job) {
+  return Math.max(0, Math.min(100, Number(job.progress) || 0));
+}
+
+function globalTaskRetentionLabel() {
+  const sourceJob = taskJobs.value.find((job) => job.retentionDaysLeft !== null && job.retentionDaysLeft !== undefined);
+  if (!sourceJob) return '保存期限：確認中';
+  if (sourceJob.expired) return '保存期限切れ';
+  return `保存期限：残り${sourceJob.retentionDaysLeft}日`;
+}
+
+function canOpenTaskResult(job) {
+  return job.status === 'completed' && !job.expired && Boolean(job.sessionId);
+}
+
+async function onTaskSelect(job) {
+  activeTaskJobId.value = job.id;
+  error.value = '';
+  if (!job.sessionId) return;
+  try {
+    sharedSessionId.value = job.sessionId;
+    const data = await loadClauseCompareResult(job.sessionId);
+    if (!data?.clauses) {
+      result.value = null;
+      status.value = 'このタスクの結果はまだ利用できません';
+      activeClauseTab.value = 'compare';
+      return;
+    }
+    result.value = data;
+    resetVisibleClauses();
+    status.value = `タスク結果を読み込みました：合計 ${data.totalClauses} 条項`;
+    activeClauseTab.value = 'compare';
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : 'タスク結果の読み込みに失敗しました';
+    status.value = '';
+  }
+}
+
+async function onTaskRerun(job) {
+  try {
+    await rerunJob(job.id);
+    await loadTaskJobs();
+    ElMessage.success('再実行をキューに追加しました');
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '再実行に失敗しました');
+  }
+}
+
+async function onTaskStop(job) {
+  try {
+    await cancelJob(job.id);
+    await loadTaskJobs();
+    ElMessage.success('タスクを停止しました');
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '停止に失敗しました');
+  }
+}
+
+function downloadTaskResult(job, format) {
+  if (!canOpenTaskResult(job)) {
+    ElMessage.warning('このタスクの結果はダウンロードできません');
+    return;
+  }
+  const a = document.createElement('a');
+  const endpoint = format === 'images'
+    ? `/api/clause-compare/images/export?sessionId=${encodeURIComponent(job.sessionId)}`
+    : `/api/clause-compare/export?format=${encodeURIComponent(format)}&sessionId=${encodeURIComponent(job.sessionId)}`;
+  a.href = endpoint;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+function handleTaskDownloadCommand(command) {
+  const [jobId, format] = String(command).split(':');
+  const job = taskJobs.value.find((item) => item.id === jobId);
+  if (!job || !format) return;
+  downloadTaskResult(job, format);
 }
 
 async function toggleResultFullscreen() {
@@ -823,10 +943,13 @@ function resetClauseCompareSessionState({ errorMessage = '' } = {}) {
 
 onMounted(() => {
   restoreClauseCompareRecovery();
+  loadTaskJobs();
+  taskRefreshTimer = window.setInterval(loadTaskJobs, 3000);
   document.addEventListener('fullscreenchange', handleDocumentFullscreenChange);
 });
 
 onBeforeUnmount(() => {
+  if (taskRefreshTimer) window.clearInterval(taskRefreshTimer);
   document.removeEventListener('fullscreenchange', handleDocumentFullscreenChange);
   if (document.fullscreenElement === rightPanelRef.value && document.exitFullscreen) {
     document.exitFullscreen().catch(() => {});
@@ -836,6 +959,27 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="clause-page">
+    <div class="clause-tabbar">
+      <button
+        type="button"
+        class="clause-tabbar-btn"
+        :class="{ active: activeClauseTab === 'compare' }"
+        @click="activeClauseTab = 'compare'"
+      >
+        比較実行
+      </button>
+      <button
+        type="button"
+        class="clause-tabbar-btn"
+        :class="{ active: activeClauseTab === 'tasks' }"
+        @click="activeClauseTab = 'tasks'"
+      >
+        タスク管理
+        <span v-if="taskJobs.length" class="tab-count">{{ taskJobs.length }}</span>
+      </button>
+    </div>
+
+    <div v-if="activeClauseTab === 'compare'" class="clause-workspace">
 
     <!-- ── Left Panel ─────────────────────────────────────────────────── -->
     <aside class="left-panel">
@@ -1293,6 +1437,111 @@ onBeforeUnmount(() => {
 
       </div>
     </div>
+    </div>
+
+    <section v-else class="task-management-page">
+      <div class="task-toolbar">
+        <div class="task-status-tabs">
+          <button
+            v-for="tab in CLAUSE_TASK_STATUS_TABS"
+            :key="tab.key"
+            type="button"
+            class="task-status-tab"
+            :class="{ active: activeTaskStatusTab === tab.key }"
+            @click="activeTaskStatusTab = tab.key"
+          >
+            {{ tab.label }}
+          </button>
+        </div>
+        <span class="task-retention-global">{{ globalTaskRetentionLabel() }}</span>
+      </div>
+
+      <div class="task-list">
+        <div v-if="filteredTaskJobs.length === 0" class="task-empty">
+          該当するタスクはありません
+        </div>
+        <article
+          v-for="job in filteredTaskJobs"
+          :key="job.id"
+          class="task-row"
+          :class="{ active: activeTaskJobId === job.id, expired: job.expired }"
+        >
+          <div class="task-main">
+            <div class="task-row-top">
+              <span class="task-status-badge" :class="taskStatusMeta(job.status).className">
+                {{ taskStatusMeta(job.status).label }}
+              </span>
+              <strong class="task-title">{{ job.name }}</strong>
+              <span v-if="job.cacheHit" class="task-cache-badge">既存結果利用</span>
+            </div>
+            <div class="task-progress-track">
+              <div class="task-progress-fill" :style="{ width: taskProgress(job) + '%' }"></div>
+            </div>
+            <div class="task-row-meta">
+              <span>{{ taskProgress(job) }}%</span>
+              <span>IP：{{ job.ipAddress || '未取得' }}</span>
+              <span>{{ job.timeLabel }}</span>
+            </div>
+          </div>
+          <div class="task-row-actions">
+            <button
+              type="button"
+              class="btn btn-outline btn-sm"
+              :disabled="!canOpenTaskResult(job)"
+              @click="onTaskSelect(job)"
+            >
+              結果表示
+            </button>
+            <button
+              v-if="job.status === 'running' || job.status === 'queued'"
+              type="button"
+              class="btn btn-secondary btn-sm"
+              @click="onTaskStop(job)"
+            >
+              中断
+            </button>
+            <button
+              v-if="job.status === 'failed' || job.status === 'cancelled'"
+              type="button"
+              class="btn btn-secondary btn-sm"
+              @click="onTaskRerun(job)"
+            >
+              リトライ
+            </button>
+            <el-dropdown
+              trigger="click"
+              :disabled="!canOpenTaskResult(job)"
+              @command="handleTaskDownloadCommand"
+            >
+              <button class="btn btn-primary btn-sm" :disabled="!canOpenTaskResult(job)">
+                <svg class="icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7,10 12,15 17,10" />
+                  <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+                ダウンロード
+                <svg class="icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="6,9 12,15 18,9" />
+                </svg>
+              </button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item :command="`${job.id}:excel`">
+                    <span class="download-menu-item">Excelエクスポート</span>
+                  </el-dropdown-item>
+                  <el-dropdown-item :command="`${job.id}:csv`">
+                    <span class="download-menu-item">CSVエクスポート</span>
+                  </el-dropdown-item>
+                  <el-dropdown-item :command="`${job.id}:images`">
+                    <span class="download-menu-item">画像一括ダウンロード</span>
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </div>
+        </article>
+      </div>
+    </section>
 
     <!-- ── Lightbox ────────────────────────────────────────────────────── -->
     <Teleport :to="lightboxTeleportTarget">
@@ -1354,10 +1603,252 @@ onBeforeUnmount(() => {
 /* ── Page layout ─────────────────────────────────────────────────────────── */
 .clause-page {
   display: flex;
+  flex-direction: column;
   height: 100%;
   overflow: hidden;
   font-size: var(--font-size-base);
-  font-family: "Noto Sans JP", sans-serif;
+  font-family: "Noto Sans JP", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #f5f7fa;
+}
+
+.clause-tabbar {
+  display: flex;
+  align-items: flex-end;
+  gap: 0;
+  height: 44px;
+  padding: 0 28px;
+  background: #f8fafc;
+  border-bottom: 1px solid #e2e8f0;
+  flex-shrink: 0;
+}
+
+.clause-tabbar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 44px;
+  padding: 0 18px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  background: transparent;
+  color: #475569;
+  font-size: var(--font-size-base);
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  transition: color 0.15s, border-color 0.15s;
+
+  &:hover {
+    color: #1e293b;
+  }
+
+  &.active {
+    color: var(--color-primary);
+    border-bottom-color: var(--color-primary);
+    font-weight: 600;
+  }
+}
+
+.tab-count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(0, 118, 191, 0.12);
+  color: #0076bf;
+  font-size: 11px;
+}
+
+.clause-workspace {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.task-management-page {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 20px;
+  background: #f5f7fa;
+}
+
+.task-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.task-status-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.task-retention-global {
+  flex-shrink: 0;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.task-status-tab {
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid #dbe3ee;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+
+  &:hover {
+    background: #f8fafc;
+  }
+
+  &.active {
+    border-color: #0076bf;
+    background: #ecf5ff;
+    color: #0076bf;
+  }
+}
+
+.task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.task-empty {
+  padding: 36px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #94a3b8;
+  text-align: center;
+  font-size: 14px;
+}
+
+.task-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+
+  &.active {
+    border-color: #0076bf;
+    box-shadow: 0 0 0 2px rgba(0, 118, 191, 0.08);
+  }
+
+  &.expired {
+    opacity: 0.68;
+  }
+}
+
+.task-main {
+  min-width: 0;
+}
+
+.task-row-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-bottom: 8px;
+}
+
+.task-title {
+  color: #1e293b;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-status-badge,
+.task-cache-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.task-cache-badge {
+  background: #f0fdf4;
+  color: #15803d;
+}
+
+.task-status-badge.queued {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.task-status-badge.running {
+  background: #fffbeb;
+  color: #b45309;
+}
+
+.task-status-badge.completed {
+  background: #f0fdf4;
+  color: #15803d;
+}
+
+.task-status-badge.failed,
+.task-status-badge.cancelled {
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.task-progress-track {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e2e8f0;
+}
+
+.task-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: #0076bf;
+  transition: width 0.25s ease;
+}
+
+.task-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 8px;
+  color: #64748b;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
 }
 
 /* ── Left panel ──────────────────────────────────────────────────────────── */
@@ -2121,40 +2612,82 @@ tr:hover td { filter: brightness(0.97); }
   align-items: center;
   justify-content: center;
   gap: 6px;
-  border-radius: 6px;
-  font-size: 12px;
+  min-height: 36px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 13px;
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, opacity 0.15s;
-  white-space: nowrap;
-  border: 1px solid transparent;
+  border: none;
+  transition: all 0.2s ease;
+  font-family: inherit;
 
-  &:disabled { opacity: 0.4; cursor: not-allowed; }
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  &.btn-sm {
+    min-height: 32px;
+    padding: 6px 10px;
+    font-size: 12px;
+    border-radius: 6px;
+  }
+
+  &.btn-icon {
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border-radius: 6px;
+  }
+
+  &.btn-ghost {
+    background: transparent;
+    border: none;
+    color: inherit;
+  }
+
+  &.btn-full {
+    width: 100%;
+  }
 }
 
 .btn-primary {
   background: #0076bf;
-  color: #fff;
-  padding: 8px 16px;
+  color: #ffffff;
 
-  &:not(:disabled):hover { background: #005a9e; }
+  &:hover:not(:disabled) {
+    background: #005a9e;
+  }
+}
+
+.btn-secondary {
+  background: #ffffff;
+  color: #64748b;
+  border: 1px solid #e2e8f0;
+
+  &:hover:not(:disabled) {
+    background: #f8fafc;
+  }
 }
 
 .btn-outline {
-  background: #fff;
-  color: #374151;
-  border-color: #d1d5db;
-  padding: 4px 10px;
+  background: #ffffff;
+  color: #0076bf;
+  border: 1px solid #0076bf;
 
-  &:not(:disabled):hover { border-color: #0076bf; color: #0076bf; }
+  &:hover:not(:disabled) {
+    background: #ecf5ff;
+  }
 }
 
 .btn-danger {
-  background: #dc2626;
-  color: #fff;
-  padding: 8px 16px;
+  background: #ef4444;
+  color: #ffffff;
 
-  &:not(:disabled):hover { background: #b91c1c; }
+  &:hover:not(:disabled) {
+    background: #dc2626;
+  }
 }
 
 .btn-filter-active {
@@ -2164,14 +2697,6 @@ tr:hover td { filter: brightness(0.97); }
   padding: 4px 10px;
 
   &:not(:disabled):hover { background: rgba(234,88,12,0.15); }
-}
-
-.btn-sm   { font-size: 13px; }
-.btn-full { width: 100%; }
-.btn-icon {
-  width: 30px;
-  height: 30px;
-  padding: 0;
 }
 
 .download-menu-item {

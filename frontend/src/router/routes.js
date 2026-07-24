@@ -27,7 +27,7 @@ const routes = [
         path: 'system-logs',
         name: 'SystemLogs',
         component: () => import('../views/SystemLogs/index.vue'),
-        meta: { title: 'システムログ' }
+        meta: { title: '利用状況管理' }
       }
     ]
   },

@@ -14,7 +14,7 @@ const route = useRoute();
 const navItems = [
   { label: 'スペックツリー', path: '/spec-tree' },
   { label: 'スペック新旧比較', path: '/clause-comparison' },
-  { label: 'システムログ', path: '/system-logs' },
+  { label: '利用状況管理', path: '/system-logs' },
 ];
 
 const licenseInfo = ref({

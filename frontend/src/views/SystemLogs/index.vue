@@ -145,7 +145,7 @@ function handleSortChange({ prop, order }) {
   <div class="system-logs-page">
     <div class="page-header">
       <div class="header-left">
-        <h1 class="page-title">システムログ</h1>
+        <h1 class="page-title">利用状況管理</h1>
         <p class="page-subtitle">処理実行履歴と利用状況の確認</p>
       </div>
       <button class="btn btn-primary download-button" @click="handleExportCsv">
