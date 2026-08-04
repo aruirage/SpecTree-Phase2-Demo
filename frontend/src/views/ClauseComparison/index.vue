@@ -3,6 +3,7 @@ import { ref, computed, nextTick, onBeforeUnmount, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus';
 import { useJobProgress } from '@/composables/useJobProgress';
 import { fetchJobsByType, cancelJob, rerunJob, loadClauseCompareResult } from '@/api/jobs';
+import { closeResultTab, upsertResultTab } from '@/utils/resultTabs';
 
 defineOptions({ name: 'ClauseComparison' });
 
@@ -39,6 +40,9 @@ const oldUploading = ref(false);
 const newUploading = ref(false);
 const sharedSessionId = ref(null);
 const result       = ref(null);
+const clauseResultTabs = ref([]);
+const clauseResultsBySession = ref({});
+const activeResultSessionId = ref('');
 const status       = ref('');
 const error        = ref('');
 const running      = ref(false);
@@ -47,6 +51,7 @@ const activeStatusFilters = ref([]);
 const activeClauseTab = ref('compare');
 const activeTaskStatusTab = ref('all');
 const taskJobs = ref([]);
+const selectedTaskIds = ref([]);
 const activeTaskJobId = ref('');
 const resultFullscreen = ref(false);
 
@@ -98,6 +103,49 @@ const {
 
 // Lightbox: { images:[{url,label}], idx:number } | null
 const lightbox = ref(null);
+
+function formatClauseResultTabLabel(job = {}) {
+  const name = String(job.title || job.name || '比較結果');
+  return name.length > 28 ? `${name.slice(0, 27)}…` : name;
+}
+
+function selectClauseResultTab(tab) {
+  activeResultSessionId.value = tab.sessionId;
+  sharedSessionId.value = tab.sessionId;
+  result.value = clauseResultsBySession.value[tab.sessionId] ?? null;
+  activeStatusFilters.value = [];
+  resetVisibleClauses();
+}
+
+function upsertClauseResultTab(tab, data) {
+  clauseResultsBySession.value = {
+    ...clauseResultsBySession.value,
+    [tab.sessionId]: data,
+  };
+  clauseResultTabs.value = upsertResultTab(clauseResultTabs.value, tab);
+  selectClauseResultTab(tab);
+}
+
+function closeClauseResultTab(tab) {
+  const closeResult = closeResultTab(clauseResultTabs.value, tab.sessionId, activeResultSessionId.value);
+  if (!closeResult.closed) return;
+
+  const { [tab.sessionId]: _closedResult, ...remainingResults } = clauseResultsBySession.value;
+  clauseResultTabs.value = closeResult.tabs;
+  clauseResultsBySession.value = remainingResults;
+
+  if (activeResultSessionId.value !== tab.sessionId) return;
+  const nextTab = closeResult.tabs.find((item) => item.sessionId === closeResult.activeSessionId);
+  if (nextTab) {
+    selectClauseResultTab(nextTab);
+  } else {
+    activeResultSessionId.value = '';
+    sharedSessionId.value = null;
+    result.value = null;
+    activeStatusFilters.value = [];
+    resetVisibleClauses();
+  }
+}
 
 function openLightbox(images, startIdx = 0) {
   lightbox.value = { images, idx: startIdx };
@@ -320,8 +368,13 @@ async function handleRun() {
     if (!data) throw new Error('比較結果がありません');
     if (requestSeq !== runRequestSeq) return;
     completeRunProgress();
-    result.value = data;
-    resetVisibleClauses();
+    upsertClauseResultTab({
+      sessionId: sharedSessionId.value,
+      jobId: accepted?.jobId || '',
+      runId: accepted?.runId || runId,
+      label: formatClauseResultTabLabel({ name: newFile.value?.fileName || newFile.value?.name || '比較結果' }),
+      closable: true,
+    }, data);
     status.value = `比較完了：合計 ${data.totalClauses} 条項、${data.changedClauses} 件変更`;
     saveClauseCompareRecovery(false, accepted);
   } catch (e) {
@@ -436,9 +489,10 @@ async function downloadFile(endpoint, fallbackName) {
 }
 
 async function handleExport(format) {
-  if (!sharedSessionId.value) return;
+  const sessionId = activeResultSessionId.value || sharedSessionId.value;
+  if (!sessionId) return;
   await downloadFile(
-    `/api/clause-compare/export?format=${encodeURIComponent(format)}&sessionId=${encodeURIComponent(sharedSessionId.value)}`,
+    `/api/clause-compare/export?format=${encodeURIComponent(format)}&sessionId=${encodeURIComponent(sessionId)}`,
     `clause-compare.${format === 'excel' ? 'xlsx' : 'csv'}`,
   );
 }
@@ -458,9 +512,10 @@ async function handleDownloadCommand(command) {
 }
 
 async function handleExportImages() {
-  if (!sharedSessionId.value) return;
+  const sessionId = activeResultSessionId.value || sharedSessionId.value;
+  if (!sessionId) return;
   await downloadFile(
-    `/api/clause-compare/images/export?sessionId=${encodeURIComponent(sharedSessionId.value)}`,
+    `/api/clause-compare/images/export?sessionId=${encodeURIComponent(sessionId)}`,
     'clause-compare-images.zip',
   );
 }
@@ -480,6 +535,14 @@ const filteredTaskJobs = computed(() => {
   }
   return taskJobs.value.filter((job) => job.status === activeTaskStatusTab.value);
 });
+const downloadableTaskJobs = computed(() => filteredTaskJobs.value.filter(canOpenTaskResult));
+const selectedDownloadableTaskJobs = computed(() => (
+  downloadableTaskJobs.value.filter((job) => selectedTaskIds.value.includes(job.id))
+));
+const allDownloadableTasksSelected = computed(() => (
+  downloadableTaskJobs.value.length > 0
+  && downloadableTaskJobs.value.every((job) => selectedTaskIds.value.includes(job.id))
+));
 
 function taskStatusMeta(status) {
   return TASK_STATUS_META[status] || { label: status || '不明', className: 'unknown' };
@@ -500,6 +563,29 @@ function canOpenTaskResult(job) {
   return job.status === 'completed' && !job.expired && Boolean(job.sessionId);
 }
 
+function isTaskSelected(job) {
+  return selectedTaskIds.value.includes(job.id);
+}
+
+function toggleTaskSelection(job) {
+  if (!canOpenTaskResult(job)) return;
+  const selected = new Set(selectedTaskIds.value);
+  if (selected.has(job.id)) selected.delete(job.id);
+  else selected.add(job.id);
+  selectedTaskIds.value = Array.from(selected);
+}
+
+function toggleDownloadableTasks() {
+  if (allDownloadableTasksSelected.value) {
+    const visibleIds = new Set(downloadableTaskJobs.value.map((job) => job.id));
+    selectedTaskIds.value = selectedTaskIds.value.filter((id) => !visibleIds.has(id));
+    return;
+  }
+  const selected = new Set(selectedTaskIds.value);
+  downloadableTaskJobs.value.forEach((job) => selected.add(job.id));
+  selectedTaskIds.value = Array.from(selected);
+}
+
 async function onTaskSelect(job) {
   activeTaskJobId.value = job.id;
   error.value = '';
@@ -513,8 +599,12 @@ async function onTaskSelect(job) {
       activeClauseTab.value = 'compare';
       return;
     }
-    result.value = data;
-    resetVisibleClauses();
+    upsertClauseResultTab({
+      sessionId: job.sessionId,
+      jobId: job.id,
+      label: formatClauseResultTabLabel(job),
+      closable: true,
+    }, data);
     status.value = `タスク結果を読み込みました：合計 ${data.totalClauses} 条項`;
     activeClauseTab.value = 'compare';
   } catch (e) {
@@ -565,6 +655,28 @@ async function handleTaskDownloadCommand(command) {
     await downloadTaskResult(job, format);
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : 'ダウンロードに失敗しました');
+  }
+}
+
+async function handleBatchTaskDownloadCommand(format) {
+  const jobs = selectedDownloadableTaskJobs.value;
+  if (jobs.length === 0) {
+    ElMessage.warning('ダウンロードするタスクを選択してください');
+    return;
+  }
+  let successCount = 0;
+  for (const job of jobs) {
+    try {
+      await downloadTaskResult(job, format);
+      successCount += 1;
+    } catch (e) {
+      console.warn('batch clause compare download failed', e);
+    }
+  }
+  if (successCount > 0) {
+    ElMessage.success(`${successCount}件のダウンロードを開始しました`);
+  } else {
+    ElMessage.error('ダウンロードに失敗しました');
   }
 }
 
@@ -933,8 +1045,13 @@ async function restoreClauseCompareRecovery() {
       const data = await waitForClauseCompareResult({ requestSeq, pollMs: 3000, stopOnNotFound: true });
       if (!data || requestSeq !== runRequestSeq) return;
       completeRunProgress();
-      result.value = data;
-      resetVisibleClauses();
+      upsertClauseResultTab({
+        sessionId: sharedSessionId.value,
+        jobId: saved.jobId || '',
+        runId: saved.runId || '',
+        label: formatClauseResultTabLabel({ name: newFile.value?.fileName || newFile.value?.name || '比較結果' }),
+        closable: true,
+      }, data);
       status.value = `比較完了：合計 ${data.totalClauses} 条項、${data.changedClauses} 件変更`;
       saveClauseCompareRecovery(false, { runId: saved.runId, jobId: saved.jobId });
       return;
@@ -945,8 +1062,13 @@ async function restoreClauseCompareRecovery() {
     if (res.ok) {
       const data = await res.json();
       if (data?.clauses) {
-        result.value = data;
-        resetVisibleClauses();
+        upsertClauseResultTab({
+          sessionId: sharedSessionId.value,
+          jobId: saved.jobId || '',
+          runId: saved.runId || '',
+          label: formatClauseResultTabLabel({ name: newFile.value?.fileName || newFile.value?.name || '比較結果' }),
+          closable: true,
+        }, data);
         status.value = `比較完了：合計 ${data.totalClauses} 条項、${data.changedClauses} 件変更`;
         saveClauseCompareRecovery(false, { runId: saved.runId, jobId: saved.jobId });
       }
@@ -986,6 +1108,9 @@ function resetClauseCompareSessionState({ errorMessage = '' } = {}) {
   newFile.value = null;
   sharedSessionId.value = null;
   result.value = null;
+  clauseResultTabs.value = [];
+  clauseResultsBySession.value = {};
+  activeResultSessionId.value = '';
   resultFullscreen.value = false;
   running.value = false;
   stoppingRun.value = false;
@@ -1192,6 +1317,31 @@ onBeforeUnmount(() => {
 
     <!-- ── Right Panel ─────────────────────────────────────────────────── -->
     <div ref="rightPanelRef" class="right-panel" :class="{ 'right-panel--fullscreen': resultFullscreen }">
+      <div v-if="clauseResultTabs.length > 0" class="clause-tabs">
+        <button
+          v-for="tab in clauseResultTabs"
+          :key="tab.sessionId"
+          type="button"
+          class="clause-tab"
+          :class="{ active: activeResultSessionId === tab.sessionId }"
+          :title="tab.label"
+          @click="selectClauseResultTab(tab)"
+        >
+          <span class="clause-tab-label">{{ tab.label }}</span>
+          <span
+            v-if="tab.closable"
+            class="clause-tab-close"
+            title="閉じる"
+            role="button"
+            tabindex="0"
+            @click.stop="closeClauseResultTab(tab)"
+            @keydown.enter.stop.prevent="closeClauseResultTab(tab)"
+            @keydown.space.stop.prevent="closeClauseResultTab(tab)"
+          >
+            ×
+          </span>
+        </button>
+      </div>
 
       <!-- Toolbar -->
       <div class="toolbar">
@@ -1525,7 +1675,48 @@ onBeforeUnmount(() => {
             {{ tab.label }}
           </button>
         </div>
-        <span class="task-retention-global">{{ globalTaskRetentionLabel() }}</span>
+        <div class="task-toolbar-actions">
+          <span class="task-retention-global">{{ globalTaskRetentionLabel() }}</span>
+          <label class="task-select-all" :class="{ disabled: downloadableTaskJobs.length === 0 }">
+            <input
+              type="checkbox"
+              :checked="allDownloadableTasksSelected"
+              :disabled="downloadableTaskJobs.length === 0"
+              @change="toggleDownloadableTasks"
+            />
+            <span>全選択</span>
+          </label>
+          <el-dropdown
+            trigger="click"
+            :disabled="selectedDownloadableTaskJobs.length === 0"
+            @command="handleBatchTaskDownloadCommand"
+          >
+            <button class="btn btn-primary btn-sm task-batch-download" :disabled="selectedDownloadableTaskJobs.length === 0">
+              <svg class="icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7,10 12,15 17,10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+              一括ダウンロード<span v-if="selectedDownloadableTaskJobs.length">({{ selectedDownloadableTaskJobs.length }})</span>
+              <svg class="icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="6,9 12,15 18,9" />
+              </svg>
+            </button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="excel">
+                  <span class="download-menu-item">Excelエクスポート</span>
+                </el-dropdown-item>
+                <el-dropdown-item command="csv">
+                  <span class="download-menu-item">CSVエクスポート</span>
+                </el-dropdown-item>
+                <el-dropdown-item command="images">
+                  <span class="download-menu-item">画像一括ダウンロード</span>
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </div>
       </div>
 
       <div class="task-list">
@@ -1538,6 +1729,14 @@ onBeforeUnmount(() => {
           class="task-row"
           :class="{ active: activeTaskJobId === job.id, expired: job.expired }"
         >
+          <label class="task-select" :class="{ disabled: !canOpenTaskResult(job) }" @click.stop>
+            <input
+              type="checkbox"
+              :checked="isTaskSelected(job)"
+              :disabled="!canOpenTaskResult(job)"
+              @change="toggleTaskSelection(job)"
+            />
+          </label>
           <div class="task-main">
             <div class="task-row-top">
               <span class="task-status-badge" :class="taskStatusMeta(job.status).className">
@@ -1764,11 +1963,45 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
 }
 
+.task-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.task-select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+
+  &.disabled {
+    color: #94a3b8;
+    cursor: not-allowed;
+  }
+
+  input {
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    accent-color: #0076bf;
+  }
+}
+
 .task-retention-global {
   flex-shrink: 0;
   color: #64748b;
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
+}
+
+.task-batch-download {
   white-space: nowrap;
 }
 
@@ -1813,7 +2046,7 @@ onBeforeUnmount(() => {
 
 .task-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
   padding: 14px;
@@ -1829,6 +2062,26 @@ onBeforeUnmount(() => {
 
   &.expired {
     opacity: 0.68;
+  }
+}
+
+.task-select {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  cursor: pointer;
+
+  &.disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+
+  input {
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    accent-color: #0076bf;
   }
 }
 
@@ -2111,6 +2364,75 @@ onBeforeUnmount(() => {
 .right-panel:fullscreen {
   display: flex;
   flex-direction: column;
+}
+
+.clause-tabs {
+  display: flex;
+  align-items: flex-end;
+  gap: 0;
+  min-height: 42px;
+  padding: 0 16px;
+  background: #ffffff;
+  border-bottom: 1px solid #e4e7ed;
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex-shrink: 0;
+}
+
+.clause-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 220px;
+  height: 42px;
+  padding: 0 10px 0 14px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  background: transparent;
+  color: #475569;
+  font-size: var(--font-size-base);
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  font-family: inherit;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+
+  &:hover {
+    color: #1e293b;
+    background: #f8fafc;
+  }
+
+  &.active {
+    color: var(--color-primary);
+    border-bottom-color: var(--color-primary);
+    font-weight: 600;
+  }
+}
+
+.clause-tab-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.clause-tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  color: #64748b;
+  font-size: 14px;
+  line-height: 1;
+  flex-shrink: 0;
+
+  &:hover {
+    background: #e2e8f0;
+    color: #1e293b;
+  }
 }
 
 /* ── Toolbar ─────────────────────────────────────────────────────────────── */

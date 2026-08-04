@@ -37,6 +37,7 @@ const generating    = ref(false);
 const direction     = ref('LR');   // 'LR' 横向き | 'TD' 縦向き
 const activeJobId = ref('');
 const taskJobs = ref([]);
+const selectedTaskIds = ref([]);
 const activeSpecTreeTab = ref('generate');
 const activeTaskStatusTab = ref('all');
 const SPEC_TREE_LABEL_WRAP_LIMIT = {
@@ -945,6 +946,14 @@ const filteredTaskJobs = computed(() => {
   }
   return taskJobs.value.filter((job) => job.status === activeTaskStatusTab.value);
 });
+const downloadableTaskJobs = computed(() => filteredTaskJobs.value.filter(canOpenTaskResult));
+const selectedDownloadableTaskJobs = computed(() => (
+  downloadableTaskJobs.value.filter((job) => selectedTaskIds.value.includes(job.id))
+));
+const allDownloadableTasksSelected = computed(() => (
+  downloadableTaskJobs.value.length > 0
+  && downloadableTaskJobs.value.every((job) => selectedTaskIds.value.includes(job.id))
+));
 function taskStatusMeta(status) {
   return TASK_STATUS_META[status] || { label: status || '不明', className: 'unknown' };
 }
@@ -962,6 +971,29 @@ function globalTaskRetentionLabel() {
 
 function canOpenTaskResult(job) {
   return job.status === 'completed' && !job.expired && Boolean(job.sessionId);
+}
+
+function isTaskSelected(job) {
+  return selectedTaskIds.value.includes(job.id);
+}
+
+function toggleTaskSelection(job) {
+  if (!canOpenTaskResult(job)) return;
+  const selected = new Set(selectedTaskIds.value);
+  if (selected.has(job.id)) selected.delete(job.id);
+  else selected.add(job.id);
+  selectedTaskIds.value = Array.from(selected);
+}
+
+function toggleDownloadableTasks() {
+  if (allDownloadableTasksSelected.value) {
+    const visibleIds = new Set(downloadableTaskJobs.value.map((job) => job.id));
+    selectedTaskIds.value = selectedTaskIds.value.filter((id) => !visibleIds.has(id));
+    return;
+  }
+  const selected = new Set(selectedTaskIds.value);
+  downloadableTaskJobs.value.forEach((job) => selected.add(job.id));
+  selectedTaskIds.value = Array.from(selected);
 }
 
 function downloadBySession(sessionId, format) {
@@ -1017,6 +1049,28 @@ async function handleTaskDownloadCommand(command) {
     await downloadTaskResult(job, format);
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : 'ダウンロードに失敗しました');
+  }
+}
+
+async function handleBatchTaskDownloadCommand(format) {
+  const jobs = selectedDownloadableTaskJobs.value;
+  if (jobs.length === 0) {
+    ElMessage.warning('ダウンロードするタスクを選択してください');
+    return;
+  }
+  let successCount = 0;
+  for (const job of jobs) {
+    try {
+      await downloadTaskResult(job, format);
+      successCount += 1;
+    } catch (e) {
+      console.warn('batch spec tree download failed', e);
+    }
+  }
+  if (successCount > 0) {
+    ElMessage.success(`${successCount}件のダウンロードを開始しました`);
+  } else {
+    ElMessage.error('ダウンロードに失敗しました');
   }
 }
 
@@ -1683,7 +1737,51 @@ watch(rootFileIds, () => {
             {{ tab.label }}
           </button>
         </div>
-        <span class="task-retention-global">{{ globalTaskRetentionLabel() }}</span>
+        <div class="task-toolbar-actions">
+          <span class="task-retention-global">{{ globalTaskRetentionLabel() }}</span>
+          <label class="task-select-all" :class="{ disabled: downloadableTaskJobs.length === 0 }">
+            <input
+              type="checkbox"
+              :checked="allDownloadableTasksSelected"
+              :disabled="downloadableTaskJobs.length === 0"
+              @change="toggleDownloadableTasks"
+            />
+            <span>全選択</span>
+          </label>
+          <el-dropdown
+            trigger="click"
+            :disabled="selectedDownloadableTaskJobs.length === 0"
+            @command="handleBatchTaskDownloadCommand"
+          >
+            <button class="btn btn-primary btn-sm task-batch-download" :disabled="selectedDownloadableTaskJobs.length === 0">
+              <svg class="icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7,10 12,15 17,10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+              一括ダウンロード<span v-if="selectedDownloadableTaskJobs.length">({{ selectedDownloadableTaskJobs.length }})</span>
+              <svg class="icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="6,9 12,15 18,9" />
+              </svg>
+            </button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="excel">
+                  <span class="download-menu-item">Excelエクスポート</span>
+                </el-dropdown-item>
+                <el-dropdown-item command="csv">
+                  <span class="download-menu-item">CSVエクスポート</span>
+                </el-dropdown-item>
+                <el-dropdown-item command="mmd" divided>
+                  <span class="download-menu-item">MMDダウンロード</span>
+                </el-dropdown-item>
+                <el-dropdown-item command="image">
+                  <span class="download-menu-item">SVGダウンロード</span>
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </div>
       </div>
 
       <div class="task-list">
@@ -1696,6 +1794,14 @@ watch(rootFileIds, () => {
           class="task-row"
           :class="{ active: activeJobId === job.id, expired: job.expired }"
         >
+          <label class="task-select" :class="{ disabled: !canOpenTaskResult(job) }" @click.stop>
+            <input
+              type="checkbox"
+              :checked="isTaskSelected(job)"
+              :disabled="!canOpenTaskResult(job)"
+              @change="toggleTaskSelection(job)"
+            />
+          </label>
           <div class="task-main">
             <div class="task-row-top">
               <span class="task-status-badge" :class="taskStatusMeta(job.status).className">
@@ -2453,11 +2559,45 @@ watch(rootFileIds, () => {
   flex-wrap: wrap;
 }
 
+.task-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.task-select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+
+  &.disabled {
+    color: #94a3b8;
+    cursor: not-allowed;
+  }
+
+  input {
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    accent-color: #0076bf;
+  }
+}
+
 .task-retention-global {
   flex-shrink: 0;
   color: #64748b;
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
+}
+
+.task-batch-download {
   white-space: nowrap;
 }
 
@@ -2502,7 +2642,7 @@ watch(rootFileIds, () => {
 
 .task-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 12px;
   align-items: center;
   padding: 14px;
@@ -2518,6 +2658,26 @@ watch(rootFileIds, () => {
 
   &.expired {
     opacity: 0.68;
+  }
+}
+
+.task-select {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  cursor: pointer;
+
+  &.disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+
+  input {
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    accent-color: #0076bf;
   }
 }
 

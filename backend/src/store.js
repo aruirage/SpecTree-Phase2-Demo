@@ -180,6 +180,128 @@ function promptKeyForJobType(type) {
   return type === 'spec_tree' ? 'spec_tree.pipeline' : 'clause_compare.extract';
 }
 
+function variantIndex(seed = '', count = 1) {
+  const text = String(seed || '');
+  const total = Array.from(text).reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  return Math.abs(total) % Math.max(1, count);
+}
+
+const SPEC_TREE_VARIANTS = [
+  {
+    rootNo: 'M000378',
+    rootLabel: 'M000378 Rev:C\\nSHAFT, LPT CONE',
+    nodes: [
+      { id: 'n1', label: 'ISAJT-P3TF2\\nFluorescent Penetrant Inspection', level: 1 },
+      { id: 'n2', label: 'ISAJT-P4TF2\\nEtching of Superalloys', level: 1 },
+      { id: 'n3', label: 'AMS 5596\\nNickel Alloy Sheet', level: 2 },
+      { id: 'n4', label: 'P2TF1\\nRegulated Materials', level: 2 },
+    ],
+  },
+  {
+    rootNo: 'M000412',
+    rootLabel: 'M000412 Rev:A\\nHEAT TREAT CONTROL',
+    nodes: [
+      { id: 'n1', label: 'AMS2750F\\nPyrometry', level: 1 },
+      { id: 'n2', label: 'ASTM E220\\nThermocouple Calibration', level: 2 },
+      { id: 'n3', label: 'SAE ARP1962\\nTemperature Sensors', level: 2 },
+      { id: 'n4', label: 'NADCAP AC7102\\nHeat Treat Audit Criteria', level: 1 },
+      { id: 'n5', label: 'HT-STD-009\\nBatch Records', level: 2 },
+    ],
+  },
+  {
+    rootNo: 'M000501',
+    rootLabel: 'M000501 Rev:B\\nSURFACE TREATMENT',
+    nodes: [
+      { id: 'n1', label: 'MIL-C-5541\\nChromate Coating', level: 1 },
+      { id: 'n2', label: 'MIL-C-13924\\nBlack Oxide Coating', level: 1 },
+      { id: 'n3', label: 'ASTM B117\\nSalt Spray Test', level: 2 },
+      { id: 'n4', label: 'ISO 9227\\nCorrosion Tests', level: 2 },
+      { id: 'n5', label: 'P4TF8\\nSwab Etching', level: 1 },
+      { id: 'n6', label: 'QA-REC-014\\nInspection Records', level: 2 },
+    ],
+  },
+];
+
+const CLAUSE_VARIANT_OVERRIDES = [
+  {
+    totalClauses: 6,
+    changedClauses: 3,
+    mutate(clauses) {
+      return clauses;
+    },
+  },
+  {
+    totalClauses: 7,
+    changedClauses: 4,
+    mutate(clauses) {
+      clauses[0].oldClauseNumber = '4.2';
+      clauses[0].newClauseNumber = '4.2';
+      clauses[0].oldContent = 'Quality records shall be retained for 5 years after shipment.';
+      clauses[0].oldTranslation = '品質記録は出荷後5年間保管しなければならない。';
+      clauses[0].newContent = 'Quality records shall be retained for 10 years after shipment and be traceable by lot number.';
+      clauses[0].newTranslation = '品質記録は出荷後10年間保管し、ロット番号で追跡可能でなければならない。';
+      clauses[1].oldClauseNumber = '5.1';
+      clauses[1].newClauseNumber = '5.1';
+      clauses[1].oldContent = 'Sampling shall be performed once per production lot.';
+      clauses[1].oldTranslation = 'サンプリングは生産ロットごとに1回実施しなければならない。';
+      clauses[1].newContent = 'Sampling shall be performed once per production lot and after each equipment change.';
+      clauses[1].newTranslation = 'サンプリングは生産ロットごと、および設備変更ごとに実施しなければならない。';
+      clauses[4].oldClauseNumber = '8.3';
+      clauses[4].oldContent = 'Manual approval stamps are acceptable for legacy inspection records.';
+      clauses[4].oldTranslation = '旧検査記録には手動承認印を使用できる。';
+      clauses[5].newClauseNumber = '9.1';
+      clauses[5].newContent = 'Electronic approval workflow shall be applied to all new inspection records.';
+      clauses[5].newTranslation = 'すべての新規検査記録には電子承認ワークフローを適用しなければならない。';
+      clauses.push({
+        id: 'c7',
+        oldClauseNumber: '',
+        newClauseNumber: '9.2',
+        oldContent: '',
+        oldTranslation: '',
+        oldImages: [],
+        newContent: 'Audit trail data shall be exported with the monthly settlement counter.',
+        newTranslation: '監査証跡データは月次精算用カウントとともに出力しなければならない。',
+        newImages: [],
+        status: '追加',
+      });
+      return clauses;
+    },
+  },
+  {
+    totalClauses: 5,
+    changedClauses: 2,
+    mutate(clauses) {
+      const selected = [clauses[0], clauses[2], clauses[3], clauses[4], clauses[5]].map((clause) => ({ ...clause }));
+      selected[0].oldClauseNumber = '2.1';
+      selected[0].newClauseNumber = '2.1';
+      selected[0].oldContent = 'Supplier certificates shall identify material grade and revision.';
+      selected[0].oldTranslation = 'サプライヤ証明書には材料グレードおよび改訂を記載しなければならない。';
+      selected[0].newContent = 'Supplier certificates shall identify material grade, revision, and country of origin.';
+      selected[0].newTranslation = 'サプライヤ証明書には材料グレード、改訂、および原産国を記載しなければならない。';
+      selected[1].oldClauseNumber = '2.2';
+      selected[1].newClauseNumber = '2.2';
+      selected[1].oldContent = 'Certificate review is required before receiving inspection.';
+      selected[1].oldTranslation = '受入検査前に証明書レビューが必要である。';
+      selected[1].newContent = 'Certificate review is required before receiving inspection.';
+      selected[1].newTranslation = '受入検査前に証明書レビューが必要である。';
+      selected[1].status = '無';
+      selected[2].oldClauseNumber = '6.4';
+      selected[2].newClauseNumber = '6.5';
+      selected[2].oldContent = 'Dimensional inspection results shall be recorded on Form Q-12.';
+      selected[2].oldTranslation = '寸法検査結果はフォームQ-12に記録しなければならない。';
+      selected[2].newContent = 'Dimensional inspection results shall be recorded on Form Q-18 with digital measurement data.';
+      selected[2].newTranslation = '寸法検査結果はデジタル測定データとともにフォームQ-18に記録しなければならない。';
+      selected[3].oldClauseNumber = '7.8';
+      selected[3].oldContent = 'Fax submission of deviation requests is permitted.';
+      selected[3].oldTranslation = '逸脱申請はFAX提出を許可する。';
+      selected[4].newClauseNumber = '8.1';
+      selected[4].newContent = 'Deviation requests shall be submitted through the controlled portal.';
+      selected[4].newTranslation = '逸脱申請は管理ポータルを通じて提出しなければならない。';
+      return selected;
+    },
+  },
+];
+
 function seedHistorySessions() {
   for (const job of store.jobs) {
     if (!job.sessionId) continue;
@@ -190,14 +312,7 @@ function seedHistorySessions() {
         run: { status: job.status, jobId: job.id },
         result: job.status === 'completed'
           ? {
-              mmdContent: MOCK_SPEC_TREE_MMD,
-              nodeCount: 4,
-              treeNodes: [
-                { id: 'root', label: 'M000378 Rev:C ASTM A36', level: 0 },
-                { id: 'n1', label: 'ASTM A572 Grade 50', level: 1 },
-                { id: 'n2', label: 'ASTM A588', level: 1 },
-                { id: 'n3', label: 'AMS2750E Pyrometry', level: 2 },
-              ],
+              ...createSpecTreeResult(job)
             }
           : null,
         progress: { running: false, stage: job.status },
@@ -213,7 +328,7 @@ function seedHistorySessions() {
         oldFile: { fileId: 'file-old', fileName: oldName.trim(), fileType: 'old' },
         newFile: { fileId: 'file-new', fileName: newName.trim(), fileType: 'new' },
         run: { status: job.status, jobId: job.id },
-        result: job.status === 'completed' ? structuredClone(MOCK_CLAUSE_COMPARE) : null,
+        result: job.status === 'completed' ? createClauseCompareResult(job) : null,
         progress: { running: job.status === 'running', stage: job.status },
         createdAt: Date.parse(job.createdAt),
       });
@@ -337,29 +452,55 @@ const CLAUSE_STAGES = [
   { stage: 'succeeded', delay: 150, progress: 100, pageTotal: 86, pageCompleted: 86 },
 ];
 
-export function createSpecTreeResult() {
+export function createSpecTreeResult(context = {}) {
+  const seed = `${context.sessionId || ''}:${context.title || ''}:${context.rootFileId || ''}`;
+  const variant = SPEC_TREE_VARIANTS[variantIndex(seed, SPEC_TREE_VARIANTS.length)];
+  const nodes = [
+    { id: 'root', label: variant.rootLabel.replace('\\n', ' '), level: 0 },
+    ...variant.nodes,
+  ];
+  const lines = [
+    'flowchart LR',
+    `  root["${variant.rootLabel}"]`,
+    ...variant.nodes.map((node) => `  ${node.id}["${node.label}"]`),
+  ];
+  let parentId = 'root';
+  for (const node of variant.nodes) {
+    if (node.level <= 1) {
+      lines.push(`  root --> ${node.id}`);
+      parentId = node.id;
+    } else {
+      lines.push(`  ${parentId} --> ${node.id}`);
+    }
+  }
   return {
-    mmdContent: MOCK_SPEC_TREE_MMD,
-    nodeCount: 4,
-    treeNodes: [
-      { id: 'root', label: 'M000378 Rev:C ASTM A36', level: 0 },
-      { id: 'n1', label: 'ASTM A572 Grade 50', level: 1 },
-      { id: 'n2', label: 'ASTM A588', level: 1 },
-      { id: 'n3', label: 'AMS2750E Pyrometry', level: 2 },
-    ],
+    mmdContent: lines.join('\n'),
+    nodeCount: nodes.length,
+    treeNodes: nodes,
   };
 }
 
-export function createClauseCompareResult() {
-  return structuredClone(MOCK_CLAUSE_COMPARE);
+export function createClauseCompareResult(context = {}) {
+  const seed = `${context.sessionId || ''}:${context.title || ''}:${context.newFile?.fileName || ''}`;
+  const variant = CLAUSE_VARIANT_OVERRIDES[variantIndex(seed, CLAUSE_VARIANT_OVERRIDES.length)];
+  const result = structuredClone(MOCK_CLAUSE_COMPARE);
+  result.clauses = variant.mutate(structuredClone(result.clauses));
+  result.totalClauses = variant.totalClauses;
+  result.changedClauses = variant.changedClauses;
+  return result;
 }
 
 function stagesForType(type) {
   return type === 'spec_tree' ? SPEC_TREE_STAGES : CLAUSE_STAGES;
 }
 
-function resultForType(type) {
-  return type === 'spec_tree' ? createSpecTreeResult() : createClauseCompareResult();
+function resultForType(type, session = {}) {
+  const job = store.jobs.find((item) => item.id === session.run?.jobId);
+  const context = {
+    ...session,
+    title: job?.title || '',
+  };
+  return type === 'spec_tree' ? createSpecTreeResult(context) : createClauseCompareResult(context);
 }
 
 function composeProgressState(stages, stageIndex, running) {
@@ -477,7 +618,7 @@ export function refreshSessionRun(session) {
   }
 
   if (complete) {
-    session.result = resultForType(type);
+    session.result = resultForType(type, session);
     session.run.status = 'completed';
     session.progress = {
       ...composeProgressState(stagesForType(type), stagesForType(type).length - 1, false),

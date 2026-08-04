@@ -157,7 +157,7 @@ function ensureSpecTreeSession(sessionId) {
   const session = createSpecTreeSession([], { sessionId });
   const job = store.jobs.find((item) => item.sessionId === sessionId);
   if (job?.status === 'completed') {
-    session.result = createSpecTreeResult();
+    session.result = createSpecTreeResult(job);
     session.run = {
       runId: nextId('run'),
       jobId: job.id,

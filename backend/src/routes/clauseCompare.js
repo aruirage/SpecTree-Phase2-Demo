@@ -124,7 +124,7 @@ function ensureClauseCompareSession(sessionId) {
   const session = createClauseCompareSession({ sessionId });
   const job = store.jobs.find((item) => item.sessionId === sessionId);
   if (job?.status === 'completed') {
-    session.result = createClauseCompareResult();
+    session.result = createClauseCompareResult(job);
     session.run = {
       runId: nextId('run'),
       jobId: job.id,
