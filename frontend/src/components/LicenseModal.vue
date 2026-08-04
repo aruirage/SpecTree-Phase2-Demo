@@ -25,7 +25,7 @@ const emit = defineEmits(['close', 'upload', 'download-settlement-counter']);
               <dd>{{ license.expiresAt || '—' }}</dd>
             </div>
             <div class="license-info__row">
-              <dt>統計日</dt>
+              <dt>対象期間</dt>
               <dd>{{ license.billingMonthLabel || '—' }}</dd>
             </div>
             <div class="license-info__row">
