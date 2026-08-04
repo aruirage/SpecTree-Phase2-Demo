@@ -192,6 +192,13 @@ function clearTreeResults() {
   treeData.value = null;
 }
 
+function clearSpecTreeUploadInputs() {
+  uploadedFiles.value = [];
+  rootFileIds.value = [];
+  uploading.value = false;
+  uploadProgress.value = 0;
+}
+
 async function loadTaskJobs() {
   try {
     taskJobs.value = await fetchJobsByType('spec_tree');
@@ -767,6 +774,8 @@ async function handleGenerate() {
       throw new Error('No jobs returned');
     }
 
+    const uploadedFileNames = new Map(uploadedFiles.value.map((file) => [file.id, file.name]));
+    clearSpecTreeUploadInputs();
     activeSpecTreeTab.value = 'tasks';
     activeTaskStatusTab.value = 'all';
     startGenerateProgress(jobs[0].sessionId, jobs[0].runId || activeGenerateRunId);
@@ -787,7 +796,7 @@ async function handleGenerate() {
         return {
           sessionId: job.sessionId,
           rootFileId: job.rootFileId,
-          label: formatSpecTreeResultName(uploadedFiles.value.find((f) => f.id === job.rootFileId)?.name),
+          label: formatSpecTreeResultName(uploadedFileNames.get(job.rootFileId)),
           closable: true,
         };
       });

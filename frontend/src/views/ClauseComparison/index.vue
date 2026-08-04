@@ -43,7 +43,7 @@ const status       = ref('');
 const error        = ref('');
 const running      = ref(false);
 const stoppingRun  = ref(false);
-const activeStatusFilter = ref('all');
+const activeStatusFilters = ref([]);
 const activeClauseTab = ref('compare');
 const activeTaskStatusTab = ref('all');
 const taskJobs = ref([]);
@@ -272,6 +272,13 @@ function onFileChange(e, fileType) {
   e.target.value = '';
 }
 
+function clearUploadInputs() {
+  oldFile.value = null;
+  newFile.value = null;
+  oldUploading.value = false;
+  newUploading.value = false;
+}
+
 // ── Run comparison ─────────────────────────────────────────────────────────
 async function handleRun() {
   if (!oldFile.value || !newFile.value || !sharedSessionId.value || running.value || stoppingRun.value) return;
@@ -308,6 +315,7 @@ async function handleRun() {
     const accepted = await res.json();
     if (accepted?.runId) activeRunId = accepted.runId;
     saveClauseCompareRecovery(true, accepted);
+    clearUploadInputs();
     const data = await waitForClauseCompareResult({ requestSeq, pollMs: 3000, stopOnNotFound: true });
     if (!data) throw new Error('比較結果がありません');
     if (requestSeq !== runRequestSeq) return;
@@ -598,6 +606,7 @@ function isChanged(clause) {
 
 function normalizeChangeStatus(clause) {
   const status = String(clause.status || '').trim();
+  if (status === UNCHANGED_STATUS_LABEL) return UNCHANGED_STATUS_LABEL;
   if (changeStatuses.has(status)) {
     return detailedChangeTypesEnabled.value ? status : '変更';
   }
@@ -770,16 +779,28 @@ const canRun = computed(() => !!oldFile.value && !!newFile.value && !running.val
 
 const filteredClauses = computed(() => {
   if (!result.value) return [];
-  if (activeStatusFilter.value === 'all') return result.value.clauses;
-  return result.value.clauses.filter(c => normalizeChangeStatus(c) === activeStatusFilter.value);
+  if (activeStatusFilters.value.length === 0) return result.value.clauses;
+  const selected = new Set(activeStatusFilters.value);
+  return result.value.clauses.filter(c => selected.has(normalizeChangeStatus(c)));
 });
 
 const activeStatusFilterLabel = computed(() => {
-  return STATUS_FILTERS.find((item) => item.key === activeStatusFilter.value)?.label || 'すべて';
+  if (activeStatusFilters.value.length === 0) return 'すべて';
+  if (activeStatusFilters.value.length === 1) {
+    return STATUS_FILTERS.find((item) => item.key === activeStatusFilters.value[0])?.label || 'すべて';
+  }
+  return `選択 ${activeStatusFilters.value.length}`;
 });
 
 function handleStatusFilterCommand(command) {
-  activeStatusFilter.value = command;
+  if (command === 'all') {
+    activeStatusFilters.value = [];
+    return;
+  }
+  const selected = new Set(activeStatusFilters.value);
+  if (selected.has(command)) selected.delete(command);
+  else selected.add(command);
+  activeStatusFilters.value = Array.from(selected);
 }
 
 const displayedClauses = computed(() => {
@@ -848,7 +869,7 @@ function ensureScrollableContent() {
   });
 }
 
-watch(activeStatusFilter, () => {
+watch(activeStatusFilters, () => {
   resetVisibleClauses();
 });
 
@@ -1181,7 +1202,7 @@ onBeforeUnmount(() => {
             <span class="badge badge-changed">変更 {{ result.changedClauses }} 件</span>
             <span class="badge badge-added">追加 {{ addedClauseCount }} 件</span>
             <span class="badge badge-deleted">削除 {{ deletedClauseCount }} 件</span>
-            <span v-if="activeStatusFilter !== 'all'" class="badge badge-secondary">表示 {{ displayedClauseTotal }} 件</span>
+            <span v-if="activeStatusFilters.length > 0" class="badge badge-secondary">表示 {{ displayedClauseTotal }} 件</span>
           </template>
         </div>
         <div class="toolbar-right">
@@ -1189,11 +1210,12 @@ onBeforeUnmount(() => {
             trigger="click"
             :disabled="!result"
             :teleported="!resultFullscreen"
+            :hide-on-click="false"
             @command="handleStatusFilterCommand"
           >
             <button
-              class="btn btn-sm"
-              :class="activeStatusFilter !== 'all' ? 'btn-filter-active' : 'btn-outline'"
+              class="btn btn-sm toolbar-compact-btn"
+              :class="activeStatusFilters.length > 0 ? 'btn-filter-active' : 'btn-outline'"
               :disabled="!result"
             >
               <svg class="icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1211,7 +1233,23 @@ onBeforeUnmount(() => {
                   :key="item.key"
                   :command="item.key"
                 >
-                  <span class="filter-menu-item" :class="{ active: activeStatusFilter === item.key }">
+                  <span
+                    class="filter-menu-item"
+                    :class="{ active: item.key === 'all' ? activeStatusFilters.length === 0 : activeStatusFilters.includes(item.key) }"
+                  >
+                    <span class="filter-menu-check">
+                      <svg
+                        v-if="item.key === 'all' ? activeStatusFilters.length === 0 : activeStatusFilters.includes(item.key)"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2.5"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      >
+                        <polyline points="20,6 9,17 4,12"/>
+                      </svg>
+                    </span>
                     {{ item.label }}
                   </span>
                 </el-dropdown-item>
@@ -1219,7 +1257,7 @@ onBeforeUnmount(() => {
             </template>
           </el-dropdown>
           <button
-            class="btn btn-outline btn-sm btn-icon"
+            class="btn btn-outline btn-sm btn-icon toolbar-compact-icon"
             :disabled="!result"
             :title="resultFullscreen ? '全画面を終了' : '全画面表示'"
             @click="toggleResultFullscreen"
@@ -1237,6 +1275,7 @@ onBeforeUnmount(() => {
               <line x1="14" y1="10" x2="21" y2="3"/>
             </svg>
           </button>
+          <div class="toolbar-divider" aria-hidden="true"></div>
           <el-dropdown
             trigger="click"
             :disabled="!result"
@@ -2685,6 +2724,29 @@ tr:hover td { filter: brightness(0.97); }
   }
 }
 
+.toolbar-divider {
+  width: 1px;
+  height: 18px;
+  margin: 0 2px;
+  background: #dbe3ee;
+}
+
+.toolbar-right button.toolbar-compact-btn {
+  min-height: 28px;
+  height: 28px;
+  padding: 0 9px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.toolbar-right button.toolbar-compact-icon {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+}
+
 .btn-primary {
   background: #0076bf;
   color: #ffffff;
@@ -2741,13 +2803,37 @@ tr:hover td { filter: brightness(0.97); }
 .filter-menu-item {
   display: inline-flex;
   align-items: center;
-  min-width: 72px;
+  gap: 8px;
+  min-width: 84px;
   font-weight: 500;
 
   &.active {
     color: #0076bf;
     font-weight: 700;
   }
+}
+
+.filter-menu-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 3px;
+  color: #ffffff;
+  background: #ffffff;
+  flex-shrink: 0;
+
+  svg {
+    width: 10px;
+    height: 10px;
+  }
+}
+
+.filter-menu-item.active .filter-menu-check {
+  border-color: #0076bf;
+  background: #0076bf;
 }
 
 .icon-sm { width: 15px; height: 15px; flex-shrink: 0; }
