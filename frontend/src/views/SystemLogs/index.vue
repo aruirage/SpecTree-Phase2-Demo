@@ -15,8 +15,8 @@ import {
   formatLogStatus,
   formatLogTarget,
   formatLogTotalPageCount,
+  getLogFactoryOptions,
   getVisiblePageNumbers,
-  LOG_FEATURE_FILTERS,
   paginateItems,
   sortSystemLogs,
 } from '@/utils/systemLogs';
@@ -28,12 +28,12 @@ const factoryInfo = ref(null);
 const filterForm = ref({
   dateRange: [],
   keyword: '',
-  feature: '',
+  factory: '',
 });
 const appliedFilters = ref({
   dateRange: [],
   keyword: '',
-  feature: '',
+  factory: '',
 });
 const currentPage = ref(1);
 const pageSize = ref(10);
@@ -74,7 +74,7 @@ function handleSearch() {
   appliedFilters.value = {
     dateRange: [...(filterForm.value.dateRange || [])],
     keyword: filterForm.value.keyword,
-    feature: filterForm.value.feature,
+    factory: filterForm.value.factory,
   };
   currentPage.value = 1;
   jumpPage.value = 1;
@@ -84,7 +84,7 @@ function handleReset() {
   filterForm.value = {
     dateRange: [],
     keyword: '',
-    feature: '',
+    factory: '',
   };
   handleSearch();
 }
@@ -116,6 +116,7 @@ const factoryShare = computed(() => {
 });
 
 const filteredLogs = computed(() => filterSystemLogs(logs.value, appliedFilters.value));
+const factoryFilterOptions = computed(() => getLogFactoryOptions(logs.value));
 const sortedLogs = computed(() => sortSystemLogs(filteredLogs.value, tableSort.value));
 const totalLogPages = computed(() => Math.max(1, Math.ceil(filteredLogs.value.length / pageSize.value)));
 const pagedLogs = computed(() => paginateItems(sortedLogs.value, currentPage.value, pageSize.value));
@@ -223,14 +224,15 @@ function handleSortChange({ prop, order }) {
           clearable
         />
         <el-select
-          v-model="filterForm.feature"
+          v-model="filterForm.factory"
           class="filter-feature"
           style="width: 170px"
-          placeholder="機能"
+          placeholder="工場・拠点"
           clearable
+          @change="handleSearch"
         >
           <el-option
-            v-for="item in LOG_FEATURE_FILTERS"
+            v-for="item in factoryFilterOptions"
             :key="item.value"
             :label="item.text"
             :value="item.value"

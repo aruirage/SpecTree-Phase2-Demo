@@ -42,10 +42,9 @@ export const store = {
   },
   license: {
     status: 'active',
-    siteCode: 'TOKYO-01',
     expiresAt: '2027-03-31',
-    monthlyUsed: 3842,
-    monthlyLimit: 5000,
+    monthlyUsed: 2000,
+    monthlyQuota: 5000,
     /** 履歴データ保持日数（固定 45 日） */
     retentionDays: 45,
     /** 保持期間の起算日（ライセンス適用開始 / アップロード日） */
@@ -574,12 +573,19 @@ export function addJob({
 }
 
 export function appendSystemEvent(event) {
-  store.systemEvents.unshift({
-    site: event.site || store.license.siteCode,
+  const normalizedEvent = {
+    site: event.site || '全体',
     at: new Date().toISOString().replace('T', ' ').slice(0, 19),
     ...event,
     ipAddress: normalizeClientIP(event.ipAddress || ''),
-  });
+  };
+  store.systemEvents.unshift(normalizedEvent);
+
+  const isBillableFeature = normalizedEvent.feature === 'スペックツリー' || normalizedEvent.feature === '条項比較';
+  const isStarted = String(normalizedEvent.actionType || '').includes('開始');
+  if (isBillableFeature && !isStarted) {
+    store.license.monthlyUsed += Number(normalizedEvent.pages) || 0;
+  }
 }
 
 // IPアドレスから工場名を取得する

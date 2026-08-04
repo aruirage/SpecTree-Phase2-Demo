@@ -1,18 +1,17 @@
 function mapLicense(data) {
   const used = data.monthlyUsed ?? 0;
-  const max = data.monthlyLimit ?? 0;
+  const quota = data.monthlyQuota ?? 5000;
   return {
-    siteId: data.siteCode,
     expiresAt: data.expiresAt,
+    billingMonth: data.billingMonth,
+    billingMonthLabel: data.billingMonthLabel,
     usedPages: used,
-    maxPages: max,
-    remainingPages: Math.max(0, max - used),
+    quotaPages: quota,
     status: data.status,
     fileName: data.fileName,
     dataClearAt: data.dataClearAt,
     retentionDays: data.retentionDays,
     retentionPolicy: data.retentionPolicy,
-    usagePercent: data.usagePercent,
   };
 }
 

@@ -13,6 +13,14 @@ export function filterLogByFeature(value, row) {
   return formatLogFeature(row?.feature) === value;
 }
 
+export function getLogFactoryOptions(logs = []) {
+  return Array.from(new Set(logs
+    .map((log) => String(log?.site || '').trim())
+    .filter(Boolean)))
+    .sort((a, b) => a.localeCompare(b, 'ja'))
+    .map((site) => ({ text: site, value: site }));
+}
+
 export function formatLogDateTime(value) {
   return String(value || '').replace('T', ' ');
 }
@@ -82,6 +90,7 @@ export function filterSystemLogs(logs, filters = {}) {
   const endTime = toDayBoundaryTime(dateRange[1], true);
   const keyword = String(filters.keyword || '').trim().toLowerCase();
   const feature = filters.feature || '';
+  const factory = filters.factory || '';
 
   return logs.filter((log) => {
     if (!isUsageLog(log)) return false;
@@ -89,6 +98,7 @@ export function filterSystemLogs(logs, filters = {}) {
     if (startTime !== null && (!Number.isFinite(logTime) || logTime < startTime)) return false;
     if (endTime !== null && (!Number.isFinite(logTime) || logTime > endTime)) return false;
     if (feature && formatLogFeature(log?.feature) !== feature) return false;
+    if (factory && log?.site !== factory) return false;
     if (!keyword) return true;
 
     const searchableText = [

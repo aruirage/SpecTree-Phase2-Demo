@@ -53,7 +53,7 @@ router.get('/export', (req, res) => {
   if (format === 'audit') {
     const payload = {
       exportedAt: new Date().toISOString(),
-      site: store.license.siteCode,
+      site: '全体',
       records: store.systemEvents.map((e, i) => ({
         seq: i + 1,
         ...e,

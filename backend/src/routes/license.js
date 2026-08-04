@@ -9,6 +9,17 @@ const router = Router();
 
 const MS_PER_DAY = 86_400_000;
 
+function currentBillingMonth(now = new Date()) {
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  return {
+    key: `${year}-${month}`,
+    label: `${year}年${month}月`,
+    from: new Date(year, now.getMonth(), 1).toISOString(),
+    to: now.toISOString(),
+  };
+}
+
 /** 起算日 + retentionDays の周期で、次回一括削除日時を算出 */
 export function computeDataClearAt(startedAt, retentionDays, now = new Date()) {
   const start = new Date(startedAt);
@@ -23,10 +34,9 @@ export function computeDataClearAt(startedAt, retentionDays, now = new Date()) {
 function buildLicenseResponse() {
   const {
     monthlyUsed,
-    monthlyLimit,
+    monthlyQuota,
     expiresAt,
     status,
-    siteCode,
     fileName,
     retentionDays,
     licenseStartedAt,
@@ -35,17 +45,18 @@ function buildLicenseResponse() {
 
   const anchor = licenseStartedAt || uploadedAt;
   const dataClearAt = computeDataClearAt(anchor, retentionDays);
+  const billingMonth = currentBillingMonth();
 
   return {
     status,
-    siteCode,
     expiresAt,
+    billingMonth: billingMonth.key,
+    billingMonthLabel: billingMonth.label,
     monthlyUsed,
-    monthlyLimit,
+    monthlyQuota,
     dataClearAt,
     retentionDays,
     licenseStartedAt: anchor,
-    usagePercent: Math.round((monthlyUsed / monthlyLimit) * 1000) / 10,
     fileName,
     /** Demo / API 文档：保持ポリシー説明 */
     retentionPolicy:
@@ -86,6 +97,7 @@ function hashRecord(record, previousHash) {
 }
 
 function buildSettlementCounterPayload() {
+  const billingMonth = currentBillingMonth();
   const records = store.systemEvents
     .filter(isBillableEvent)
     .slice()
@@ -93,7 +105,7 @@ function buildSettlementCounterPayload() {
     .map((event, index) => ({
       seq: index + 1,
       at: event.at,
-      site: event.site || store.license.siteCode,
+      site: event.site || '全体',
       ipAddress: event.ipAddress || '',
       feature: formatFeature(event.feature),
       target: event.note || event.detail || '',
@@ -118,18 +130,18 @@ function buildSettlementCounterPayload() {
     formatVersion: '1.0',
     encrypted: true,
     generatedAt: new Date().toISOString(),
-    siteCode: store.license.siteCode,
     licenseFileName: store.license.fileName,
     billingMetric: 'total_pages',
     billingPeriod: {
-      from: store.license.licenseStartedAt,
-      to: new Date().toISOString(),
+      month: billingMonth.key,
+      from: billingMonth.from,
+      to: billingMonth.to,
     },
     summary: {
       recordCount: chainedRecords.length,
       totalPages: chainedRecords.reduce((sum, record) => sum + record.totalPages, 0),
       monthlyUsed: store.license.monthlyUsed,
-      monthlyLimit: store.license.monthlyLimit,
+      monthlyQuota: store.license.monthlyQuota,
     },
     records: chainedRecords,
     chainHead: previousHash,
@@ -152,7 +164,7 @@ function settlementCounterFileName() {
     pad(now.getHours()),
     pad(now.getMinutes()),
   ].join('');
-  return `settlement_counter_${store.license.siteCode}_${stamp}.enc`;
+  return `settlement_counter_${stamp}.enc`;
 }
 
 router.get('/current', (_req, res) => {

@@ -192,7 +192,7 @@ test('license exports a separate encrypted settlement counter file', async (t) =
   assert.equal(exportRes.headers.get('content-type'), 'application/octet-stream');
   assert.match(
     exportRes.headers.get('content-disposition') || '',
-    /settlement_counter_TOKYO-01_\d{12}\.enc/,
+    /settlement_counter_\d{12}\.enc/,
   );
 
   const envelope = JSON.parse(Buffer.from(await exportRes.arrayBuffer()).toString('utf-8'));
@@ -200,9 +200,12 @@ test('license exports a separate encrypted settlement counter file', async (t) =
   const payload = JSON.parse(Buffer.from(envelope.payload, 'base64').toString('utf-8'));
   assert.equal(payload.fileType, 'settlement_counter');
   assert.equal(payload.billingMetric, 'total_pages');
-  assert.equal(payload.siteCode, 'TOKYO-01');
+  assert.match(payload.billingPeriod.month, /^\d{4}-\d{2}$/);
   assert.equal(typeof payload.chainHead, 'string');
   assert.equal(payload.summary.totalPages > 0, true);
+  assert.equal(typeof payload.summary.monthlyUsed, 'number');
+  assert.equal(payload.summary.monthlyQuota, 5000);
+  assert.equal('monthlyLimit' in payload.summary, false);
 });
 
 test('clause compare excel export keeps row styling separate from field diff styling', async (t) => {

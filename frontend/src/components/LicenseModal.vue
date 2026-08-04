@@ -21,16 +21,19 @@ const emit = defineEmits(['close', 'upload', 'download-settlement-counter']);
         <div class="license-modal__body">
           <dl class="license-info">
             <div class="license-info__row">
-              <dt>拠点</dt>
-              <dd>{{ license.siteId || '—' }}</dd>
-            </div>
-            <div class="license-info__row">
               <dt>有効期限</dt>
               <dd>{{ license.expiresAt || '—' }}</dd>
             </div>
             <div class="license-info__row">
-              <dt>残りページ数</dt>
-              <dd>{{ license.remainingPages ?? '—' }} / {{ license.maxPages ?? '—' }}</dd>
+              <dt>統計日</dt>
+              <dd>{{ license.billingMonthLabel || '—' }}</dd>
+            </div>
+            <div class="license-info__row">
+              <dt>今月の利用ページ数</dt>
+              <dd>
+                {{ Number(license.usedPages || 0).toLocaleString() }}
+                / {{ Number(license.quotaPages || 5000).toLocaleString() }} ページ
+              </dd>
             </div>
           </dl>
 
@@ -49,7 +52,7 @@ const emit = defineEmits(['close', 'upload', 'download-settlement-counter']);
             </button>
           </div>
 
-          <p class="license-modal__hint">License の更新は進行中のタスクに影響しません。</p>
+          <p class="license-modal__hint">月間 5,000 ページは目安です。超過しても処理は停止しません。</p>
         </div>
       </div>
     </div>

@@ -5,18 +5,21 @@ const props = defineProps({
   collapsed: { type: Boolean, default: false },
   usedPages: { type: Number, default: 0 },
   maxPages: { type: Number, default: 5000 },
+  quotaPages: { type: Number, default: 5000 },
+  billingMonthLabel: { type: String, default: '' },
 });
 
 const emit = defineEmits(['click']);
 
-const remaining = computed(() => Math.max(0, props.maxPages - props.usedPages));
+const displayLimit = computed(() => props.quotaPages || props.maxPages || 5000);
+const remaining = computed(() => Math.max(0, displayLimit.value - props.usedPages));
 const percent = computed(() => {
-  if (!props.maxPages) return 0;
-  return Math.min(100, Math.round((props.usedPages / props.maxPages) * 100));
+  if (!displayLimit.value) return 0;
+  return Math.min(100, Math.round((props.usedPages / displayLimit.value) * 100));
 });
 
 const barClass = computed(() => {
-  const left = remaining.value / props.maxPages;
+  const left = remaining.value / displayLimit.value;
   if (left <= 0.1) return 'is-danger';
   if (left <= 0.2) return 'is-warning';
   return '';
@@ -32,14 +35,14 @@ const barClass = computed(() => {
     @click="emit('click')"
   >
     <template v-if="!collapsed">
-      <span class="license-widget__label">今月の利用状況</span>
+      <span class="license-widget__label">{{ billingMonthLabel || '今月' }}の利用状況</span>
       <span class="license-widget__value">
-        {{ usedPages.toLocaleString() }} / {{ maxPages.toLocaleString() }} ページ
+        {{ usedPages.toLocaleString() }} / {{ displayLimit.toLocaleString() }} ページ
       </span>
       <div class="license-widget__bar">
         <div class="license-widget__fill" :style="{ width: percent + '%' }" />
       </div>
-      <span class="license-widget__hint">残 {{ remaining.toLocaleString() }} ページ · クリックで詳細</span>
+      <span class="license-widget__hint">クリックで詳細</span>
     </template>
     <template v-else>
       <svg class="license-widget__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -57,10 +60,10 @@ const barClass = computed(() => {
   max-width: 100%;
   margin: 0;
   padding: 10px 8px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  border: 1px solid transparent;
   border-radius: 8px;
-  background: #2b3648;
-  color: rgba(255, 255, 255, 0.85);
+  background: #ffffff;
+  color: #1f2937;
   text-align: left;
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s;
@@ -69,8 +72,8 @@ const barClass = computed(() => {
   overflow: hidden;
 
   &:hover {
-    background: #334158;
-    border-color: rgba(148, 163, 184, 0.28);
+    background: #f8fafc;
+    border-color: transparent;
   }
 
   &.collapsed {
@@ -86,7 +89,7 @@ const barClass = computed(() => {
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    color: rgba(255, 255, 255, 0.5);
+    color: #64748b;
     margin-bottom: 4px;
   }
 
@@ -102,7 +105,7 @@ const barClass = computed(() => {
   &__bar {
     height: 6px;
     border-radius: 3px;
-    background: rgba(255, 255, 255, 0.12);
+    background: #e2e8f0;
     overflow: hidden;
     margin-bottom: 6px;
   }
@@ -126,7 +129,7 @@ const barClass = computed(() => {
     display: block;
     font-size: 10px;
     line-height: 1.35;
-    color: rgba(255, 255, 255, 0.45);
+    color: #64748b;
     word-break: break-word;
   }
 

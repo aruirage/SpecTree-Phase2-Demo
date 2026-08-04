@@ -18,11 +18,11 @@ const navItems = [
 ];
 
 const licenseInfo = ref({
-  siteId: '—',
   expiresAt: '—',
+  billingMonth: '',
+  billingMonthLabel: '',
   usedPages: 0,
-  maxPages: 5000,
-  remainingPages: 5000,
+  quotaPages: 5000,
 });
 
 async function loadLicense() {
@@ -115,7 +115,8 @@ function isActive(path) {
         <LicenseWidget
           :collapsed="collapsed"
           :used-pages="licenseInfo.usedPages"
-          :max-pages="licenseInfo.maxPages"
+          :quota-pages="licenseInfo.quotaPages"
+          :billing-month-label="licenseInfo.billingMonthLabel"
           @click="licenseModalOpen = true"
         />
       </div>

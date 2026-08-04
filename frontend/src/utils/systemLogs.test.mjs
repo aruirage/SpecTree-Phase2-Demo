@@ -9,6 +9,7 @@ import {
   formatLogStatus,
   formatLogTarget,
   formatLogTotalPageCount,
+  getLogFactoryOptions,
   getVisiblePageNumbers,
   isUsageLog,
   LOG_FEATURE_FILTERS,
@@ -89,10 +90,12 @@ assert.deepEqual(
   filterSystemLogs(sampleLogs, {
     dateRange: ['2026-06-30', '2026-06-30'],
     keyword: '18',
-    feature: 'スペック新旧比較',
+    factory: '桶川工場',
   }).map((log) => log.note),
   ['AMS2750E.pdf;AMS2750F.pdf'],
 );
+assert.deepEqual(filterSystemLogs(sampleLogs, { factory: '安来工場' }).map((log) => log.note), ['M000388.pdf']);
+assert.deepEqual(getLogFactoryOptions(sampleLogs).map((item) => item.text), ['安来工場', '桶川工場']);
 assert.deepEqual(filterSystemLogs(sampleLogs, { keyword: '中止' }).map((log) => log.note), ['AMS5510J.pdf;AMS5510K.pdf']);
 
 assert.deepEqual(paginateItems([1, 2, 3, 4, 5], 2, 2), [3, 4]);
