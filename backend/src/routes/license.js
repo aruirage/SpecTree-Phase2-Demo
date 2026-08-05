@@ -8,15 +8,42 @@ const upload = multer({ storage: multer.memoryStorage() });
 const router = Router();
 
 const MS_PER_DAY = 86_400_000;
+/** 課金周期（3 か月ごとに精算） */
+const BILLING_PERIOD_MONTHS = 3;
 
-function currentBillingMonth(now = new Date()) {
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
+function pad2(value) {
+  return String(value).padStart(2, '0');
+}
+
+function toDateOnly(date) {
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+}
+
+function addMonths(date, months) {
+  const next = new Date(date.getTime());
+  next.setMonth(next.getMonth() + months);
+  return next;
+}
+
+/**
+ * 起算日（licenseStartedAt）から 3 か月ごとの課金期間を算出。
+ * 現在日時を含む期間の start / end を返す。end は start + 3 か月の同日。
+ */
+export function currentBillingPeriod(startedAt, now = new Date()) {
+  const anchor = startedAt ? new Date(startedAt) : new Date(now.getFullYear(), now.getMonth(), 1);
+  let start = new Date(anchor.getTime());
+  let end = addMonths(start, BILLING_PERIOD_MONTHS);
+  // 現在を含む期間まで進める
+  while (end <= now) {
+    start = end;
+    end = addMonths(start, BILLING_PERIOD_MONTHS);
+  }
   return {
-    key: `${year}-${month}`,
-    label: `${year}年${month}月`,
-    from: new Date(year, now.getMonth(), 1).toISOString(),
-    to: now.toISOString(),
+    start: start.toISOString(),
+    end: end.toISOString(),
+    startDate: toDateOnly(start),
+    endDate: toDateOnly(end),
+    label: `${toDateOnly(start)} 〜 ${toDateOnly(end)}`,
   };
 }
 
@@ -35,7 +62,6 @@ function buildLicenseResponse() {
   const {
     monthlyUsed,
     monthlyQuota,
-    expiresAt,
     status,
     fileName,
     retentionDays,
@@ -45,13 +71,19 @@ function buildLicenseResponse() {
 
   const anchor = licenseStartedAt || uploadedAt;
   const dataClearAt = computeDataClearAt(anchor, retentionDays);
-  const billingMonth = currentBillingMonth();
+  const period = currentBillingPeriod(anchor);
 
   return {
     status,
-    expiresAt,
-    billingMonth: billingMonth.key,
-    billingMonthLabel: billingMonth.label,
+    /** 有効期限（課金期間の終了日、日付精度） */
+    expiresAt: period.endDate,
+    /** 課金対象期間 */
+    billingPeriodStart: period.startDate,
+    billingPeriodEnd: period.endDate,
+    billingPeriodLabel: period.label,
+    // 旧フィールド（互換のため残す）
+    billingMonth: period.startDate.slice(0, 7),
+    billingMonthLabel: period.label,
     monthlyUsed,
     monthlyQuota,
     dataClearAt,
@@ -82,6 +114,15 @@ function resolveTotalPages(event) {
   return Number(event.totalPages ?? event.pages) || 0;
 }
 
+function resolveDurationMinutes(event) {
+  return Number(event.durationMinutes) || 0;
+}
+
+function resolveProcessedPages(event) {
+  if (resolveResult(event) === '失敗') return 0;
+  return Number(event.pages) || 0;
+}
+
 function isBillableEvent(event) {
   const feature = formatFeature(event.feature);
   if (feature !== 'スペックツリー' && feature !== 'スペック新旧比較') return false;
@@ -97,7 +138,7 @@ function hashRecord(record, previousHash) {
 }
 
 function buildSettlementCounterPayload() {
-  const billingMonth = currentBillingMonth();
+  const period = currentBillingPeriod(store.license.licenseStartedAt || store.license.uploadedAt);
   const records = store.systemEvents
     .filter(isBillableEvent)
     .slice()
@@ -133,9 +174,8 @@ function buildSettlementCounterPayload() {
     licenseFileName: store.license.fileName,
     billingMetric: 'total_pages',
     billingPeriod: {
-      month: billingMonth.key,
-      from: billingMonth.from,
-      to: billingMonth.to,
+      from: period.startDate,
+      to: period.endDate,
     },
     summary: {
       recordCount: chainedRecords.length,
@@ -156,15 +196,23 @@ function buildSettlementCounterPayload() {
 
 function settlementCounterFileName() {
   const now = new Date();
-  const pad = (value) => String(value).padStart(2, '0');
   const stamp = [
     now.getFullYear(),
-    pad(now.getMonth() + 1),
-    pad(now.getDate()),
-    pad(now.getHours()),
-    pad(now.getMinutes()),
+    pad2(now.getMonth() + 1),
+    pad2(now.getDate()),
+    pad2(now.getHours()),
+    pad2(now.getMinutes()),
   ].join('');
   return `settlement_counter_${stamp}.enc`;
+}
+
+function parseDateBoundary(value, endOfDay = false) {
+  if (!value) return null;
+  const date = new Date(String(value));
+  if (Number.isNaN(date.getTime())) return null;
+  if (endOfDay) date.setHours(23, 59, 59, 999);
+  else date.setHours(0, 0, 0, 0);
+  return date.getTime();
 }
 
 router.get('/current', (_req, res) => {
@@ -198,6 +246,47 @@ router.get('/settlement-counter/export', (_req, res) => {
   res.setHeader('Content-Type', 'application/octet-stream');
   res.setHeader('Content-Disposition', `attachment; filename="${settlementCounterFileName()}"`);
   res.send(Buffer.from(JSON.stringify(envelope, null, 2), 'utf-8'));
+});
+
+/**
+ * 期間指定で利用ログを CSV エクスポート。
+ * query: from=YYYY-MM-DD, to=YYYY-MM-DD（未指定なら全期間）
+ */
+router.get('/usage-log/export', (req, res) => {
+  const fromTime = parseDateBoundary(req.query.from, false);
+  const toTime = parseDateBoundary(req.query.to, true);
+
+  const events = store.systemEvents.filter((event) => {
+    if (!isBillableEvent(event)) return false;
+    const at = Date.parse(event.at || '');
+    if (!Number.isFinite(at)) return false;
+    if (fromTime !== null && at < fromTime) return false;
+    if (toTime !== null && at > toTime) return false;
+    return true;
+  });
+
+  const header = '利用日時,処理時間（分）,IPアドレス,工場・拠点,機能,操作対象,処理ページ数,総ページ数,処理結果';
+  const rows = events.map((event) => [
+    event.at,
+    resolveDurationMinutes(event),
+    event.ipAddress || '',
+    event.site,
+    formatFeature(event.feature),
+    event.note || event.detail || '',
+    resolveProcessedPages(event),
+    resolveTotalPages(event),
+    resolveResult(event),
+  ].join(','));
+  const csv = '﻿' + [header, ...rows].join('\n');
+
+  const fromLabel = req.query.from || 'all';
+  const toLabel = req.query.to || 'all';
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="usage_log_${fromLabel}_${toLabel}.csv"`,
+  );
+  res.send(csv);
 });
 
 export default router;

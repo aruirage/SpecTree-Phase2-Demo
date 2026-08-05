@@ -98,7 +98,7 @@ onMounted(async () => {
 
 const factoryLogs = computed(() => {
   const factory = factoryInfo.value?.factory;
-  if (!factory || factory === '不明') return [];
+  if (!factory) return [];
   return filteredLogs.value.filter((log) => log.site === factory);
 });
 
@@ -163,7 +163,7 @@ function handleSortChange({ prop, order }) {
       <!-- 工場情報表示 -->
       <div class="info-card">
         <div class="info-label">接続元拠点</div>
-        <div class="info-value" :class="{ 'unknown': factoryInfo?.factory === '不明' }">
+        <div class="info-value">
           {{ factoryInfo?.factory || '-' }}
         </div>
         <div class="info-meta">IP: {{ factoryInfo?.ipAddress || '-' }}</div>
@@ -473,10 +473,6 @@ function handleSortChange({ prop, order }) {
   line-height: 1;
   font-weight: 700;
   color: #0076bf;
-  
-  &.unknown {
-    color: #e6a700;
-  }
 }
 
 .info-meta {

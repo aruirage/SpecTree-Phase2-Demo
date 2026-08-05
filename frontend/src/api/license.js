@@ -1,10 +1,13 @@
 function mapLicense(data) {
   const used = data.monthlyUsed ?? 0;
-  const quota = data.monthlyQuota ?? 5000;
+  const quota = data.monthlyQuota ?? 1500;
   return {
     expiresAt: data.expiresAt,
     billingMonth: data.billingMonth,
     billingMonthLabel: data.billingMonthLabel,
+    billingPeriodStart: data.billingPeriodStart,
+    billingPeriodEnd: data.billingPeriodEnd,
+    billingPeriodLabel: data.billingPeriodLabel,
     usedPages: used,
     quotaPages: quota,
     status: data.status,
@@ -45,6 +48,22 @@ export function downloadLogExport(format) {
 export function downloadSettlementCounter() {
   const a = document.createElement('a');
   a.href = '/api/license/settlement-counter/export';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+/**
+ * 期間指定で利用ログをダウンロード。
+ * @param {string} from 開始日 YYYY-MM-DD
+ * @param {string} to 終了日 YYYY-MM-DD
+ */
+export function downloadUsageLog(from, to) {
+  const params = new URLSearchParams();
+  if (from) params.set('from', from);
+  if (to) params.set('to', to);
+  const a = document.createElement('a');
+  a.href = `/api/license/usage-log/export?${params.toString()}`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);

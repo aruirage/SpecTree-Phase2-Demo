@@ -42,12 +42,12 @@ export const store = {
   },
   license: {
     status: 'active',
-    expiresAt: '2027-03-31',
+    expiresAt: '2026-08-17',
     monthlyUsed: 2000,
-    monthlyQuota: 5000,
+    monthlyQuota: 1500,
     /** 履歴データ保持日数（固定 45 日） */
     retentionDays: 45,
-    /** 保持期間の起算日（ライセンス適用開始 / アップロード日） */
+    /** 保持期間・課金期間の起算日（ライセンス適用開始 / アップロード日） */
     licenseStartedAt: '2026-05-17T00:00:00.000Z',
     fileName: 'license_tokyo01.lic',
     uploadedAt: '2026-05-17T00:00:00.000Z',
@@ -84,8 +84,8 @@ export const store = {
       actionType: 'タスク完了',
       feature: '条項比較',
       processCount: 2,
-      pages: 86,
-      totalPages: 86,
+      pages: 200,
+      totalPages: 200,
       durationMinutes: 18,
       detail: '差分抽出',
       operator: 'user01',
@@ -98,8 +98,8 @@ export const store = {
       actionType: 'タスク完了',
       feature: 'スペックツリー',
       processCount: 2,
-      pages: 124,
-      totalPages: 124,
+      pages: 30,
+      totalPages: 30,
       durationMinutes: 26,
       detail: 'ツリー作成',
       operator: 'user02',
@@ -112,8 +112,8 @@ export const store = {
       actionType: 'タスク完了',
       feature: 'スペックツリー',
       processCount: 1,
-      pages: 68,
-      totalPages: 68,
+      pages: 25,
+      totalPages: 25,
       durationMinutes: 14,
       detail: 'ツリー作成',
       operator: 'user03',
@@ -126,8 +126,8 @@ export const store = {
       actionType: 'タスク完了',
       feature: '条項比較',
       processCount: 2,
-      pages: 156,
-      totalPages: 156,
+      pages: 250,
+      totalPages: 250,
       durationMinutes: 32,
       detail: '差分抽出',
       operator: 'user01',
@@ -140,8 +140,8 @@ export const store = {
       actionType: 'タスク完了',
       feature: 'スペックツリー',
       processCount: 1,
-      pages: 92,
-      totalPages: 92,
+      pages: 40,
+      totalPages: 40,
       durationMinutes: 21,
       detail: 'ツリー作成',
       operator: 'user04',
@@ -153,8 +153,8 @@ export const store = {
       at: '2026-06-28T11:40:00',
       actionType: 'タスク中止',
       feature: '条項比較',
-      pages: 42,
-      totalPages: 118,
+      pages: 60,
+      totalPages: 150,
       durationMinutes: 9,
       detail: '差分抽出',
       operator: 'user01',
@@ -167,7 +167,7 @@ export const store = {
       actionType: 'タスク失敗',
       feature: 'スペックツリー',
       pages: 0,
-      totalPages: 76,
+      totalPages: 25,
       durationMinutes: 6,
       detail: 'ツリー作成',
       operator: 'user03',
@@ -731,7 +731,7 @@ export function appendSystemEvent(event) {
 
 // IPアドレスから工場名を取得する
 export function getFactoryFromIP(ipAddress) {
-  return store.ipFactoryMap[normalizeClientIP(ipAddress)] || '不明';
+  return store.ipFactoryMap[normalizeClientIP(ipAddress)] || '安来工場';
 }
 
 // 結果キャッシュをチェックする
@@ -759,7 +759,7 @@ export function cacheResult(type, files, session, options = {}) {
     sessionId: session.sessionId,
     result: session.result,
     cachedAt: Date.now(),
-    factory: session.factory || '不明',
+    factory: session.factory || '安来工場',
   });
 }
 
@@ -800,7 +800,7 @@ function executeTask(task) {
   const { type, session, files, options, factory, ipAddress, jobId } = task;
   const job = store.jobs.find((j) => j.id === jobId);
   if (job) {
-    job.factory = factory || job.factory || '不明';
+    job.factory = factory || job.factory || '安来工場';
     job.ipAddress = normalizeClientIP(ipAddress || job.ipAddress || '');
     job.status = 'running';
     job.updatedAt = new Date().toISOString();

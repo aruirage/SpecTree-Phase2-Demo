@@ -5,7 +5,7 @@ import { ElMessage } from 'element-plus';
 import logo from '@/assets/llm-ocr-logo.png';
 import LicenseWidget from '@/components/LicenseWidget.vue';
 import LicenseModal from '@/components/LicenseModal.vue';
-import { downloadSettlementCounter, fetchCurrentLicense, uploadLicenseFile } from '@/api/license';
+import { downloadUsageLog, fetchCurrentLicense, uploadLicenseFile } from '@/api/license';
 
 const collapsed = ref(false);
 const licenseModalOpen = ref(false);
@@ -21,8 +21,11 @@ const licenseInfo = ref({
   expiresAt: '—',
   billingMonth: '',
   billingMonthLabel: '',
+  billingPeriodStart: '',
+  billingPeriodEnd: '',
+  billingPeriodLabel: '',
   usedPages: 0,
-  quotaPages: 5000,
+  quotaPages: 1500,
 });
 
 async function loadLicense() {
@@ -50,9 +53,9 @@ function handleLicenseUpload() {
   input.click();
 }
 
-function handleSettlementCounterDownload() {
-  downloadSettlementCounter();
-  ElMessage.success('精算用カウントファイルのダウンロードを開始しました');
+function handleUsageLogDownload({ from, to }) {
+  downloadUsageLog(from, to);
+  ElMessage.success('利用ログのダウンロードを開始しました');
 }
 
 onMounted(loadLicense);
@@ -116,7 +119,6 @@ function isActive(path) {
           :collapsed="collapsed"
           :used-pages="licenseInfo.usedPages"
           :quota-pages="licenseInfo.quotaPages"
-          :billing-month-label="licenseInfo.billingMonthLabel"
           @click="licenseModalOpen = true"
         />
       </div>
@@ -156,7 +158,7 @@ function isActive(path) {
       :license="licenseInfo"
       @close="licenseModalOpen = false"
       @upload="handleLicenseUpload"
-      @download-settlement-counter="handleSettlementCounterDownload"
+      @download-usage-log="handleUsageLogDownload"
     />
   </div>
 </template>

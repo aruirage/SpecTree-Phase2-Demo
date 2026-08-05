@@ -195,7 +195,7 @@ function startSpecTreeJobs(sourceSession, rootIds, { clientRunId, factory, ipAdd
       targetSession.progress = { running: false, stage: 'succeeded' };
       
       appendSystemEvent({
-        site: factory || '不明',
+        site: factory || '安来工場',
         ipAddress: ipAddress,
         actionType: 'キャッシュヒット',
         feature: 'スペックツリー',
@@ -215,9 +215,9 @@ function startSpecTreeJobs(sourceSession, rootIds, { clientRunId, factory, ipAdd
       });
     } else {
       // キャッシュにないのでタスクをキューに追加
-      targetSession.factory = factory || '不明';
+      targetSession.factory = factory || '安来工場';
       targetSession.ipAddress = ipAddress;
-      job.factory = factory || '不明';
+      job.factory = factory || '安来工場';
       job.ipAddress = ipAddress;
       
       enqueueTask({

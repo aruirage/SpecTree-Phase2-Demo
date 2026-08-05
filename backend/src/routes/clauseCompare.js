@@ -463,7 +463,7 @@ function beginRun(session, clientRunId, factory, ipAddress) {
     session.progress = { running: false, stage: 'succeeded' };
     
     appendSystemEvent({
-      site: factory || '不明',
+      site: factory || '安来工場',
       ipAddress: ipAddress,
       actionType: 'キャッシュヒット',
       feature: '条項比較',
@@ -492,7 +492,7 @@ function beginRun(session, clientRunId, factory, ipAddress) {
   });
   const runId = clientRunId || nextId('run');
   
-  session.factory = factory || '不明';
+  session.factory = factory || '安来工場';
   session.ipAddress = ipAddress;
   
   enqueueTask({

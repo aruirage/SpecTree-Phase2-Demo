@@ -3,6 +3,7 @@ import {
   getQueueStatus,
   cleanupExpiredData,
   getFactoryFromIP,
+  normalizeClientIP,
   store,
 } from '../store.js';
 
@@ -28,11 +29,11 @@ router.get('/factory', (req, res) => {
   const ipAddress = xForwardedFor ? xForwardedFor.split(',')[0].trim() : clientIP;
   
   const factory = getFactoryFromIP(ipAddress);
-  
+
   res.json({
     ipAddress,
     factory,
-    isRecognized: factory !== '不明',
+    isRecognized: Boolean(store.ipFactoryMap[normalizeClientIP(ipAddress)]),
   });
 });
 

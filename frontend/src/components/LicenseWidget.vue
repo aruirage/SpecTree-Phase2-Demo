@@ -4,14 +4,13 @@ import { computed } from 'vue';
 const props = defineProps({
   collapsed: { type: Boolean, default: false },
   usedPages: { type: Number, default: 0 },
-  maxPages: { type: Number, default: 5000 },
-  quotaPages: { type: Number, default: 5000 },
-  billingMonthLabel: { type: String, default: '' },
+  maxPages: { type: Number, default: 1500 },
+  quotaPages: { type: Number, default: 1500 },
 });
 
 const emit = defineEmits(['click']);
 
-const displayLimit = computed(() => props.quotaPages || props.maxPages || 5000);
+const displayLimit = computed(() => props.quotaPages || props.maxPages || 1500);
 const remaining = computed(() => Math.max(0, displayLimit.value - props.usedPages));
 const percent = computed(() => {
   if (!displayLimit.value) return 0;
@@ -35,7 +34,7 @@ const barClass = computed(() => {
     @click="emit('click')"
   >
     <template v-if="!collapsed">
-      <span class="license-widget__label">{{ billingMonthLabel || '今月' }}の利用状況</span>
+      <span class="license-widget__label">本期の利用状況</span>
       <span class="license-widget__value">
         {{ usedPages.toLocaleString() }} / {{ displayLimit.toLocaleString() }} ページ
       </span>
