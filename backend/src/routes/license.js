@@ -77,6 +77,8 @@ function buildLicenseResponse() {
     status,
     /** 有効期限（課金期間の終了日、日付精度） */
     expiresAt: period.endDate,
+    /** 有効期間（月数表記。例：3ヶ月） */
+    validityPeriodLabel: `${BILLING_PERIOD_MONTHS}ヶ月`,
     /** 課金対象期間 */
     billingPeriodStart: period.startDate,
     billingPeriodEnd: period.endDate,
@@ -114,15 +116,6 @@ function resolveTotalPages(event) {
   return Number(event.totalPages ?? event.pages) || 0;
 }
 
-function resolveDurationMinutes(event) {
-  return Number(event.durationMinutes) || 0;
-}
-
-function resolveProcessedPages(event) {
-  if (resolveResult(event) === '失敗') return 0;
-  return Number(event.pages) || 0;
-}
-
 function isBillableEvent(event) {
   const feature = formatFeature(event.feature);
   if (feature !== 'スペックツリー' && feature !== 'スペック新旧比較') return false;
@@ -137,10 +130,20 @@ function hashRecord(record, previousHash) {
     .digest('hex');
 }
 
-function buildSettlementCounterPayload() {
+function buildSettlementCounterPayload(fromDate, toDate) {
   const period = currentBillingPeriod(store.license.licenseStartedAt || store.license.uploadedAt);
+  const fromTime = parseDateBoundary(fromDate, false);
+  const toTime = parseDateBoundary(toDate, true);
+
   const records = store.systemEvents
-    .filter(isBillableEvent)
+    .filter((event) => {
+      if (!isBillableEvent(event)) return false;
+      const at = Date.parse(event.at || '');
+      if (!Number.isFinite(at)) return false;
+      if (fromTime !== null && at < fromTime) return false;
+      if (toTime !== null && at > toTime) return false;
+      return true;
+    })
     .slice()
     .reverse()
     .map((event, index) => ({
@@ -174,8 +177,8 @@ function buildSettlementCounterPayload() {
     licenseFileName: store.license.fileName,
     billingMetric: 'total_pages',
     billingPeriod: {
-      from: period.startDate,
-      to: period.endDate,
+      from: fromDate || period.startDate,
+      to: toDate || period.endDate,
     },
     summary: {
       recordCount: chainedRecords.length,
@@ -194,7 +197,10 @@ function buildSettlementCounterPayload() {
   };
 }
 
-function settlementCounterFileName() {
+function settlementCounterFileName(fromDate, toDate) {
+  if (fromDate || toDate) {
+    return `settlement_counter_${fromDate || 'all'}_${toDate || 'all'}.enc`;
+  }
   const now = new Date();
   const stamp = [
     now.getFullYear(),
@@ -241,52 +247,18 @@ router.post('/upload', upload.single('file'), (req, res) => {
   res.json(buildLicenseResponse());
 });
 
-router.get('/settlement-counter/export', (_req, res) => {
-  const envelope = buildSettlementCounterPayload();
-  res.setHeader('Content-Type', 'application/octet-stream');
-  res.setHeader('Content-Disposition', `attachment; filename="${settlementCounterFileName()}"`);
-  res.send(Buffer.from(JSON.stringify(envelope, null, 2), 'utf-8'));
-});
-
 /**
- * 期間指定で利用ログを CSV エクスポート。
+ * 精算用カウントファイル（暗号化 .enc）を期間指定でエクスポート。
  * query: from=YYYY-MM-DD, to=YYYY-MM-DD（未指定なら全期間）
  */
-router.get('/usage-log/export', (req, res) => {
-  const fromTime = parseDateBoundary(req.query.from, false);
-  const toTime = parseDateBoundary(req.query.to, true);
-
-  const events = store.systemEvents.filter((event) => {
-    if (!isBillableEvent(event)) return false;
-    const at = Date.parse(event.at || '');
-    if (!Number.isFinite(at)) return false;
-    if (fromTime !== null && at < fromTime) return false;
-    if (toTime !== null && at > toTime) return false;
-    return true;
-  });
-
-  const header = '利用日時,処理時間（分）,IPアドレス,工場・拠点,機能,操作対象,処理ページ数,総ページ数,処理結果';
-  const rows = events.map((event) => [
-    event.at,
-    resolveDurationMinutes(event),
-    event.ipAddress || '',
-    event.site,
-    formatFeature(event.feature),
-    event.note || event.detail || '',
-    resolveProcessedPages(event),
-    resolveTotalPages(event),
-    resolveResult(event),
-  ].join(','));
-  const csv = '﻿' + [header, ...rows].join('\n');
-
-  const fromLabel = req.query.from || 'all';
-  const toLabel = req.query.to || 'all';
-  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+router.get('/settlement-counter/export', (req, res) => {
+  const envelope = buildSettlementCounterPayload(req.query.from, req.query.to);
+  res.setHeader('Content-Type', 'application/octet-stream');
   res.setHeader(
     'Content-Disposition',
-    `attachment; filename="usage_log_${fromLabel}_${toLabel}.csv"`,
+    `attachment; filename="${settlementCounterFileName(req.query.from, req.query.to)}"`,
   );
-  res.send(csv);
+  res.send(Buffer.from(JSON.stringify(envelope, null, 2), 'utf-8'));
 });
 
 export default router;

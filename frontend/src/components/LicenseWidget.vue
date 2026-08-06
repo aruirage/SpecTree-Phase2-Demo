@@ -4,13 +4,13 @@ import { computed } from 'vue';
 const props = defineProps({
   collapsed: { type: Boolean, default: false },
   usedPages: { type: Number, default: 0 },
-  maxPages: { type: Number, default: 1500 },
-  quotaPages: { type: Number, default: 1500 },
+  maxPages: { type: Number, default: 15000 },
+  quotaPages: { type: Number, default: 15000 },
 });
 
 const emit = defineEmits(['click']);
 
-const displayLimit = computed(() => props.quotaPages || props.maxPages || 1500);
+const displayLimit = computed(() => props.quotaPages || props.maxPages || 15000);
 const remaining = computed(() => Math.max(0, displayLimit.value - props.usedPages));
 const percent = computed(() => {
   if (!displayLimit.value) return 0;
@@ -30,11 +30,11 @@ const barClass = computed(() => {
     type="button"
     class="license-widget"
     :class="{ collapsed, [barClass]: true }"
-    :title="collapsed ? '利用状況' : undefined"
+    :data-label="collapsed ? 'ライセンス管理' : undefined"
     @click="emit('click')"
   >
     <template v-if="!collapsed">
-      <span class="license-widget__label">本期の利用状況</span>
+      <span class="license-widget__label">ご利用状況</span>
       <span class="license-widget__value">
         {{ usedPages.toLocaleString() }} / {{ displayLimit.toLocaleString() }} ページ
       </span>
@@ -80,6 +80,36 @@ const barClass = computed(() => {
     align-items: center;
     justify-content: center;
     padding: 14px 0;
+    position: relative;
+    overflow: visible;
+
+    &::after {
+      content: attr(data-label);
+      position: absolute;
+      left: calc(100% + 10px);
+      top: 50%;
+      transform: translateY(-50%) translateX(-4px);
+      padding: 6px 10px;
+      background: #1f2937;
+      color: #ffffff;
+      font-size: 12px;
+      font-weight: 500;
+      line-height: 1;
+      white-space: nowrap;
+      border-radius: 6px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transition: opacity 0.15s, transform 0.15s, visibility 0.15s;
+      z-index: 100;
+    }
+
+    &:hover::after {
+      opacity: 1;
+      visibility: visible;
+      transform: translateY(-50%) translateX(0);
+    }
   }
 
   &__label {

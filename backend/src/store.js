@@ -44,7 +44,7 @@ export const store = {
     status: 'active',
     expiresAt: '2026-08-17',
     monthlyUsed: 2000,
-    monthlyQuota: 1500,
+    monthlyQuota: 15000,
     /** 履歴データ保持日数（固定 45 日） */
     retentionDays: 45,
     /** 保持期間・課金期間の起算日（ライセンス適用開始 / アップロード日） */

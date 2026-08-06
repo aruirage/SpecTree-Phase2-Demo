@@ -25,7 +25,7 @@ const licenseInfo = ref({
   billingPeriodEnd: '',
   billingPeriodLabel: '',
   usedPages: 0,
-  quotaPages: 1500,
+  quotaPages: 15000,
 });
 
 async function loadLicense() {
@@ -55,7 +55,7 @@ function handleLicenseUpload() {
 
 function handleUsageLogDownload({ from, to }) {
   downloadUsageLog(from, to);
-  ElMessage.success('利用ログのダウンロードを開始しました');
+  ElMessage.success('精算用ログのダウンロードを開始しました');
 }
 
 onMounted(loadLicense);
@@ -83,7 +83,7 @@ function isActive(path) {
           :to="item.path"
           class="nav-item"
           :class="{ active: isActive(item.path) }"
-          :title="collapsed ? item.label : undefined"
+          :data-label="collapsed ? item.label : undefined"
         >
           <!-- Spec Tree Icon -->
           <svg v-if="item.path === '/spec-tree'" class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -222,6 +222,10 @@ function isActive(path) {
   flex-direction: column;
   gap: 2px;
   min-height: 0;
+
+  .sidebar.collapsed & {
+    overflow: visible;
+  }
 }
 
 .sidebar-footer {
@@ -260,6 +264,36 @@ function isActive(path) {
   .sidebar.collapsed & {
     justify-content: center;
     padding: 10px 0;
+    position: relative;
+    overflow: visible;
+
+    &::after {
+      content: attr(data-label);
+      position: absolute;
+      left: calc(100% + 10px);
+      top: 50%;
+      transform: translateY(-50%) translateX(-4px);
+      padding: 6px 10px;
+      background: #1f2937;
+      color: #ffffff;
+      font-size: 12px;
+      font-weight: 500;
+      line-height: 1;
+      white-space: nowrap;
+      border-radius: 6px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transition: opacity 0.15s, transform 0.15s, visibility 0.15s;
+      z-index: 100;
+    }
+
+    &:hover::after {
+      opacity: 1;
+      visibility: visible;
+      transform: translateY(-50%) translateX(0);
+    }
   }
 }
 

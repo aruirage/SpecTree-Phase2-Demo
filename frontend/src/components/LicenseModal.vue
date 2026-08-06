@@ -37,8 +37,8 @@ function handleDownloadUsageLog() {
             <span class="info-icon" tabindex="0" aria-label="ライセンスについて">
               i
               <span class="info-icon__tooltip" role="tooltip">
-                3 か月ごとに精算します。上限 1,500 ページは目安です。超過しても処理は停止しません。
-                ログをエクスポートして新しい License をアップロードすると、有効期限・対象期間が更新されます。
+                定期的に精算を行います。上限ページ数は目安であり、超過しても処理は停止しません。
+                利用ログをエクスポートし、新しいライセンスファイルをアップロードすることで、有効期限および対象期間が更新されます。
               </span>
             </span>
           </div>
@@ -51,18 +51,23 @@ function handleDownloadUsageLog() {
           <dl class="license-info">
             <div class="license-info__row">
               <dt>有効期限</dt>
-              <dd>{{ license.expiresAt || '—' }}</dd>
+              <dd>{{ license.validityPeriodLabel || '—' }}</dd>
             </div>
             <div class="license-info__row">
               <dt>対象期間</dt>
               <dd>{{ license.billingPeriodLabel || '—' }}</dd>
             </div>
             <div class="license-info__row">
-              <dt>本期の利用ページ数</dt>
-              <dd>
-                {{ Number(license.usedPages || 0).toLocaleString() }}
-                / {{ Number(license.quotaPages || 1500).toLocaleString() }} ページ
-              </dd>
+              <dt>契約ページ数</dt>
+              <dd>{{ Number(license.quotaPages || 15000).toLocaleString() }} ページ</dd>
+            </div>
+            <div class="license-info__row">
+              <dt>利用済みページ数</dt>
+              <dd>{{ Number(license.usedPages || 0).toLocaleString() }} ページ</dd>
+            </div>
+            <div class="license-info__row">
+              <dt>残りページ数</dt>
+              <dd>{{ Math.max(0, Number(license.quotaPages || 15000) - Number(license.usedPages || 0)).toLocaleString() }} ページ</dd>
             </div>
           </dl>
 
@@ -73,7 +78,7 @@ function handleDownloadUsageLog() {
           </div>
 
           <div class="export-section">
-            <div class="export-section__title">利用ログのエクスポート（期間指定）</div>
+            <div class="export-section__title">精算用ログのエクスポート（期間指定・暗号化）</div>
             <div class="export-range">
               <label class="export-range__field">
                 <span>開始日</span>
@@ -96,7 +101,7 @@ function handleDownloadUsageLog() {
                 <line x1="12" y1="15" x2="12" y2="3" />
                 <path d="M16 6V5a4 4 0 0 0-8 0v1" />
               </svg>
-              利用ログをダウンロード
+              精算用ログをダウンロード（.enc）
             </button>
           </div>
         </div>

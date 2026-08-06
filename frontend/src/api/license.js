@@ -1,8 +1,9 @@
 function mapLicense(data) {
   const used = data.monthlyUsed ?? 0;
-  const quota = data.monthlyQuota ?? 1500;
+  const quota = data.monthlyQuota ?? 15000;
   return {
     expiresAt: data.expiresAt,
+    validityPeriodLabel: data.validityPeriodLabel,
     billingMonth: data.billingMonth,
     billingMonthLabel: data.billingMonthLabel,
     billingPeriodStart: data.billingPeriodStart,
@@ -45,16 +46,8 @@ export function downloadLogExport(format) {
   document.body.removeChild(a);
 }
 
-export function downloadSettlementCounter() {
-  const a = document.createElement('a');
-  a.href = '/api/license/settlement-counter/export';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-}
-
 /**
- * 期間指定で利用ログをダウンロード。
+ * 精算用カウントファイル（暗号化 .enc）を期間指定でダウンロード。
  * @param {string} from 開始日 YYYY-MM-DD
  * @param {string} to 終了日 YYYY-MM-DD
  */
@@ -63,7 +56,7 @@ export function downloadUsageLog(from, to) {
   if (from) params.set('from', from);
   if (to) params.set('to', to);
   const a = document.createElement('a');
-  a.href = `/api/license/usage-log/export?${params.toString()}`;
+  a.href = `/api/license/settlement-counter/export?${params.toString()}`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
