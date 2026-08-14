@@ -81,6 +81,27 @@ function clauseDownloadBaseName(session) {
   return safeDownloadName(`comp_${baseName(session?.newFile?.fileName || 'new')}_${timestampForFileName()}`);
 }
 
+function fileMetaFromPayload(file, fileType = 'old') {
+  if (!file) return null;
+  const fileName = normalizeUploadedFileName(file.name || file.fileName || file.originalname || 'upload.pdf');
+  return {
+    fileId: nextId('file'),
+    fileName,
+    fileType,
+    size: Number(file.size || 0),
+    mimeType: file.mimeType || file.type || 'application/octet-stream',
+  };
+}
+
+function validateFileSize(file, limitMb, res) {
+  if (Number(file?.size || 0) <= limitMb * MB) return true;
+  res.status(413).json({
+    code: 'UPLOAD_FILE_SIZE_LIMIT',
+    error: `file size must be ${limitMb}MB or less`,
+  });
+  return false;
+}
+
 function imageBufferFromDataUrl(dataUrl = '') {
   const [, payload = ''] = String(dataUrl).split(',');
   return Buffer.from(decodeURIComponent(payload), 'utf8');
@@ -405,17 +426,19 @@ async function buildClauseCompareWorkbook(result) {
 }
 
 router.post('/upload', upload.single('file'), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'file is required' });
   const fileType = req.body.fileType || 'old';
+  const file = req.file
+    ? {
+        fileId: nextId('file'),
+        fileName: normalizeUploadedFileName(req.file.originalname),
+        fileType,
+        size: req.file.size,
+        mimeType: req.file.mimetype,
+      }
+    : fileMetaFromPayload(req.body.file, fileType);
+  if (!file) return res.status(400).json({ error: 'file is required' });
+  if (!validateFileSize(file, CLAUSE_COMPARE_FILE_SIZE_LIMIT_MB, res)) return;
   const session = getOrCreateSession(req.body.sessionId);
-  const fileName = normalizeUploadedFileName(req.file.originalname);
-  const file = {
-    fileId: nextId('file'),
-    fileName,
-    fileType,
-    size: req.file.size,
-    mimeType: req.file.mimetype,
-  };
   if (fileType === 'new') session.newFile = file;
   else session.oldFile = file;
   res.json({

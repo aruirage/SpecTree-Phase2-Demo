@@ -69,12 +69,9 @@ const MAX_IMAGE_EXPORT_SIDE = 12000;
 const MAX_IMAGE_EXPORT_PIXELS = 80000000;
 const MAX_SPEC_TREE_UPLOAD_FILE_SIZE_MB = 30;
 const MAX_SPEC_TREE_UPLOAD_FILE_SIZE = MAX_SPEC_TREE_UPLOAD_FILE_SIZE_MB * 1024 * 1024;
-const MAX_SPEC_TREE_TOTAL_UPLOAD_SIZE_MB = 50;
-const MAX_SPEC_TREE_TOTAL_UPLOAD_SIZE = MAX_SPEC_TREE_TOTAL_UPLOAD_SIZE_MB * 1024 * 1024;
 const MAX_EXCEL_UPLOAD_FILE_SIZE_MB = 5;
 const MAX_EXCEL_UPLOAD_FILE_SIZE = MAX_EXCEL_UPLOAD_FILE_SIZE_MB * 1024 * 1024;
 const SPEC_TREE_FILE_SIZE_LIMIT_MESSAGE = `ファイルサイズが${MAX_SPEC_TREE_UPLOAD_FILE_SIZE_MB}MBを超えています。${MAX_SPEC_TREE_UPLOAD_FILE_SIZE_MB}MB以下のファイルをアップロードしてください。`;
-const SPEC_TREE_TOTAL_SIZE_LIMIT_MESSAGE = `アップロードファイルの合計サイズが${MAX_SPEC_TREE_TOTAL_UPLOAD_SIZE_MB}MBを超えています。合計${MAX_SPEC_TREE_TOTAL_UPLOAD_SIZE_MB}MB以下にしてください。`;
 const EXCEL_FILE_SIZE_LIMIT_MESSAGE = `Excelファイルサイズが${MAX_EXCEL_UPLOAD_FILE_SIZE_MB}MBを超えています。${MAX_EXCEL_UPLOAD_FILE_SIZE_MB}MB以下のファイルをアップロードしてください。`;
 const UI_FONT_FAMILY = '"Noto Sans JP", sans-serif';
 const SPEC_TREE_RECOVERY_KEY = 'daikin:spec_tree:recovery:v1';
@@ -279,9 +276,17 @@ async function uploadExcelConfig(kind, file) {
     throw new Error(EXCEL_FILE_SIZE_LIMIT_MESSAGE);
   }
   const endpoint = kind === 'supplement' ? '/api/spec-tree/upload/supplement' : '/api/spec-tree/upload/deletion';
-  const formData = new FormData();
-  formData.append('file', file);
-  const res = await fetch(endpoint, { method: 'PUT', body: formData });
+  const res = await fetch(endpoint, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      file: {
+        name: file.name,
+        size: file.size,
+        mimeType: file.type,
+      },
+    }),
+  });
   if (!res.ok) {
     throw new Error('Excel のアップロードに失敗しました');
   }
@@ -597,12 +602,6 @@ function isAcceptedSpecTreeFile(file) {
   return SPEC_TREE_ACCEPTED_EXTENSIONS.some(ext => name.endsWith(ext)) || SPEC_TREE_ACCEPTED_MIME_TYPES.has(file?.type);
 }
 
-function totalSpecTreeUploadSize(nextFiles = []) {
-  const merged = new Map(uploadedFiles.value.map((file) => [file.name, file.size || 0]));
-  nextFiles.forEach((file) => merged.set(file.name, file.size || 0));
-  return Array.from(merged.values()).reduce((sum, size) => sum + Number(size || 0), 0);
-}
-
 async function handleFiles(files) {
   if (!canUpload.value) {
     isDragging.value = false;
@@ -617,13 +616,6 @@ async function handleFiles(files) {
     uploadProgress.value = 0;
     return;
   }
-  if (totalSpecTreeUploadSize(validFiles) > MAX_SPEC_TREE_TOTAL_UPLOAD_SIZE) {
-    error.value = SPEC_TREE_TOTAL_SIZE_LIMIT_MESSAGE;
-    status.value = '';
-    uploading.value = false;
-    uploadProgress.value = 0;
-    return;
-  }
 
   error.value    = '';
   uploading.value = true;
@@ -631,11 +623,18 @@ async function handleFiles(files) {
   status.value   = 'ファイルをアップロード中...';
 
   try {
-    const formData = new FormData();
-    validFiles.forEach(f => formData.append('files', f));
-
     uploadProgress.value = 40;
-    const res = await fetch('/api/spec-tree/upload', { method: 'POST', body: formData });
+    const res = await fetch('/api/spec-tree/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        files: validFiles.map((file) => ({
+          name: file.name,
+          size: file.size,
+          mimeType: file.type,
+        })),
+      }),
+    });
     uploadProgress.value = 80;
 
     if (!res.ok) {

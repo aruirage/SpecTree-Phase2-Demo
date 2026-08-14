@@ -280,12 +280,19 @@ async function uploadFile(file, fileType) {
   error.value = '';
 
   try {
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('fileType', fileType);
-    if (sharedSessionId.value) formData.append('sessionId', sharedSessionId.value);
-
-    const res = await fetch('/api/clause-compare/upload', { method: 'POST', body: formData });
+    const res = await fetch('/api/clause-compare/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fileType,
+        sessionId: sharedSessionId.value,
+        file: {
+          name: file.name,
+          size: file.size,
+          mimeType: file.type,
+        },
+      }),
+    });
     if (!res.ok) {
       throw new Error(await readErrorPayload(res, 'Upload failed.'));
     }

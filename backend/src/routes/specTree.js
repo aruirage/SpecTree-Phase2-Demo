@@ -21,7 +21,6 @@ import { normalizeUploadedFileName } from '../utils/fileNames.js';
 
 const MB = 1024 * 1024;
 const SPEC_TREE_FILE_SIZE_LIMIT_MB = 30;
-const SPEC_TREE_TOTAL_SIZE_LIMIT_MB = 50;
 const EXCEL_FILE_SIZE_LIMIT_MB = 5;
 const specTreeUpload = multer({
   storage: multer.memoryStorage(),
@@ -95,6 +94,49 @@ function fileMeta(file) {
     size: file.size,
     mimeType: file.mimetype,
     uploadedAt: new Date().toISOString(),
+  };
+}
+
+function fileMetaFromPayload(file) {
+  const fileName = normalizeUploadedFileName(file?.name || file?.fileName || file?.originalname || 'upload.pdf');
+  return {
+    id: nextId('file'),
+    name: fileName,
+    size: Number(file?.size || 0),
+    mimeType: file?.mimeType || file?.type || 'application/octet-stream',
+    uploadedAt: new Date().toISOString(),
+  };
+}
+
+function validateFileSize(files = [], limitMb, res) {
+  const overLimit = files.find((file) => Number(file.size || 0) > limitMb * MB);
+  if (!overLimit) return true;
+  res.status(413).json({
+    code: 'UPLOAD_FILE_SIZE_LIMIT',
+    error: `file size must be ${limitMb}MB or less`,
+  });
+  return false;
+}
+
+function specTreeFilesFromRequest(req) {
+  const payloadFiles = Array.isArray(req.body?.files) ? req.body.files : [];
+  if (payloadFiles.length > 0) return payloadFiles.map(fileMetaFromPayload);
+  return (req.files || []).map(fileMeta);
+}
+
+function excelFileFromRequest(req) {
+  if (req.file) {
+    return {
+      ...fileMeta(req.file),
+      fileName: normalizeUploadedFileName(req.file.originalname),
+    };
+  }
+  const payload = req.body?.file;
+  if (!payload) return null;
+  const meta = fileMetaFromPayload(payload);
+  return {
+    ...meta,
+    fileName: meta.name,
   };
 }
 
@@ -297,8 +339,8 @@ router.get('/excel', (_req, res) => {
 });
 
 router.put('/upload/documents', specTreeUpload.array('files'), (req, res) => {
-  if (!validateSpecTreeTotalSize(req, res)) return;
-  const files = (req.files || []).map(fileMeta);
+  const files = specTreeFilesFromRequest(req);
+  if (!validateFileSize(files, SPEC_TREE_FILE_SIZE_LIMIT_MB, res)) return;
   const session = createSpecTreeSession(files);
   res.json({ sessionId: session.sessionId, files });
 });
@@ -312,27 +354,13 @@ function getClientInfo(req) {
   return { ipAddress, factory };
 }
 
-function totalFileSize(files = []) {
-  return files.reduce((sum, file) => sum + Number(file.size || 0), 0);
-}
-
-function validateSpecTreeTotalSize(req, res) {
-  if (totalFileSize(req.files || []) <= SPEC_TREE_TOTAL_SIZE_LIMIT_MB * MB) return true;
-  res.status(413).json({
-    code: 'UPLOAD_TOTAL_SIZE_LIMIT',
-    error: `total file size must be ${SPEC_TREE_TOTAL_SIZE_LIMIT_MB}MB or less`,
-  });
-  return false;
-}
-
 router.put('/upload/supplement', excelUpload.single('file'), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'file is required' });
+  const file = excelFileFromRequest(req);
+  if (!file) return res.status(400).json({ error: 'file is required' });
+  if (!validateFileSize([file], EXCEL_FILE_SIZE_LIMIT_MB, res)) return;
   const { ipAddress, factory } = getClientInfo(req);
   
-  store.excelConfig.supplement = {
-    ...fileMeta(req.file),
-    fileName: normalizeUploadedFileName(req.file.originalname),
-  };
+  store.excelConfig.supplement = file;
   appendSystemEvent({
     site: factory,
     ipAddress: ipAddress,
@@ -347,13 +375,12 @@ router.put('/upload/supplement', excelUpload.single('file'), (req, res) => {
 });
 
 router.put('/upload/deletion', excelUpload.single('file'), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'file is required' });
+  const file = excelFileFromRequest(req);
+  if (!file) return res.status(400).json({ error: 'file is required' });
+  if (!validateFileSize([file], EXCEL_FILE_SIZE_LIMIT_MB, res)) return;
   const { ipAddress, factory } = getClientInfo(req);
   
-  store.excelConfig.deletion = {
-    ...fileMeta(req.file),
-    fileName: normalizeUploadedFileName(req.file.originalname),
-  };
+  store.excelConfig.deletion = file;
   appendSystemEvent({
     site: factory,
     ipAddress: ipAddress,
@@ -388,8 +415,8 @@ router.post('/jobs', (req, res) => {
 // ── Phase 1 compatible routes (existing frontend) ─────────────────────────
 
 router.post('/upload', specTreeUpload.array('files'), (req, res) => {
-  if (!validateSpecTreeTotalSize(req, res)) return;
-  const files = (req.files || []).map(fileMeta);
+  const files = specTreeFilesFromRequest(req);
+  if (!validateFileSize(files, SPEC_TREE_FILE_SIZE_LIMIT_MB, res)) return;
   const session = createSpecTreeSession(files);
   res.json({ sessionId: session.sessionId, files });
 });

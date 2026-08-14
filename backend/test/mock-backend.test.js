@@ -32,6 +32,10 @@ function createPdfFile(name) {
   return new File([new Blob(['%PDF-1.4 mock'])], name, { type: 'application/pdf' });
 }
 
+function createSizedFile(name, sizeMb, type = 'application/pdf') {
+  return new File([new Uint8Array(sizeMb * 1024 * 1024)], name, { type });
+}
+
 async function readJson(res) {
   const data = await res.json().catch(() => ({}));
   assert.equal(res.ok, true, JSON.stringify(data));
@@ -147,6 +151,65 @@ test('prompt setup is not exposed in phase 2 demo logs or API', async (t) => {
     logs.events.some((event) => event.actionType === 'プロンプト変更'),
     false,
   );
+});
+
+test('spec tree upload does not block batches over the recommended total size', async (t) => {
+  const baseUrl = await startBackend(t);
+
+  const form = new FormData();
+  form.append('files', createSizedFile('Root-A.pdf', 29));
+  form.append('files', createSizedFile('Root-B.pdf', 29));
+  const upload = await readJson(await fetch(`${baseUrl}/api/spec-tree/upload`, {
+    method: 'POST',
+    body: form,
+  }));
+
+  assert.equal(upload.files.length, 2);
+  assert.equal(upload.files[0].size, 29 * 1024 * 1024);
+  assert.equal(upload.files[1].size, 29 * 1024 * 1024);
+});
+
+test('demo upload endpoints accept file metadata without binary payloads', async (t) => {
+  const baseUrl = await startBackend(t);
+
+  const specUpload = await readJson(await fetch(`${baseUrl}/api/spec-tree/upload`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      files: [
+        { name: 'M000378.pdf', size: 30 * 1024 * 1024, mimeType: 'application/pdf' },
+        { name: '関連仕様.tif', size: 28 * 1024 * 1024, mimeType: 'image/tiff' },
+      ],
+    }),
+  }));
+  assert.equal(specUpload.files.length, 2);
+  assert.equal(specUpload.files[0].name, 'M000378.pdf');
+  assert.equal(specUpload.files[1].name, '関連仕様.tif');
+
+  const supplement = await readJson(await fetch(`${baseUrl}/api/spec-tree/upload/supplement`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      file: {
+        name: 'ASTMリスト_260605.xlsx',
+        size: 5 * 1024 * 1024,
+        mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      },
+    }),
+  }));
+  assert.equal(supplement.fileName, 'ASTMリスト_260605.xlsx');
+
+  const clauseUpload = await readJson(await fetch(`${baseUrl}/api/clause-compare/upload`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      fileType: 'old',
+      file: { name: 'AMS2750 E.pdf', size: 30 * 1024 * 1024, mimeType: 'application/pdf' },
+    }),
+  }));
+  assert.match(clauseUpload.sessionId, /^cc-/);
+  assert.equal(clauseUpload.fileName, 'AMS2750 E.pdf');
+  assert.equal(clauseUpload.fileType, 'old');
 });
 
 test('job cancel stops the backing mock session', async (t) => {
