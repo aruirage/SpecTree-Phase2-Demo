@@ -153,6 +153,24 @@ test('prompt setup is not exposed in phase 2 demo logs or API', async (t) => {
   );
 });
 
+test('initial spec tree mock jobs are visible and completed results can be opened', async (t) => {
+  const baseUrl = await startBackend(t);
+
+  const active = await readJson(await fetch(`${baseUrl}/api/jobs?type=spec_tree&scope=active`));
+  const history = await readJson(await fetch(`${baseUrl}/api/jobs?type=spec_tree&scope=history`));
+  const jobs = [...active.jobs, ...history.jobs];
+
+  assert.equal(jobs.length >= 3, true);
+  assert.equal(jobs.some((job) => job.status === 'completed'), true);
+  assert.equal(jobs.some((job) => job.status === 'failed'), true);
+  assert.equal(jobs.some((job) => job.status === 'cancelled'), true);
+
+  const completed = jobs.find((job) => job.status === 'completed');
+  const result = await readJson(await fetch(`${baseUrl}/api/spec-tree/result?sessionId=${encodeURIComponent(completed.sessionId)}`));
+  assert.ok(result.mmdContent.includes('flowchart LR'));
+  assert.equal(result.nodeCount > 0, true);
+});
+
 test('spec tree upload does not block batches over the recommended total size', async (t) => {
   const baseUrl = await startBackend(t);
 
