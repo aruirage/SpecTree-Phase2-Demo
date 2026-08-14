@@ -1139,6 +1139,10 @@ async function restoreSpecTreeRecovery() {
   if (generating.value || treeData.value) return;
   const saved = loadSpecTreeRecovery();
   if (!saved?.sessionId || saved.feature !== 'spec_tree') return;
+  if (!saved.generating) {
+    clearSpecTreeRecovery();
+    return;
+  }
   restoringSpecTreeRecovery = true;
   sessionId.value = saved.sessionId;
   uploadedFiles.value = Array.isArray(saved.uploadedFiles)
@@ -1167,20 +1171,6 @@ async function restoreSpecTreeRecovery() {
       status.value = `スペックツリーの生成が完了しました。合計 ${treeData.value.nodeCount} ノード`;
       saveSpecTreeRecovery(false, { runId: saved.runId, jobId: saved.jobId });
       return;
-    }
-
-    const res = await fetch(`/api/spec-tree/result?sessionId=${encodeURIComponent(sessionId.value)}`, { cache: 'no-store' });
-    if (requestSeq !== generateRequestSeq) return;
-    if (res.ok) {
-      const result = await res.json();
-      if (result?.mmdContent) {
-        treeData.value = normalizeSpecTreeResult(result);
-        warnIfSpecTreeHasNoChildNodes(treeData.value);
-        status.value = `スペックツリーの生成が完了しました。合計 ${treeData.value.nodeCount} ノード`;
-        saveSpecTreeRecovery(false, { runId: saved.runId, jobId: saved.jobId });
-      }
-    } else if (res.status === 404) {
-      resetSpecTreeSessionState();
     }
   } catch (e) {
     if (requestSeq !== generateRequestSeq) return;

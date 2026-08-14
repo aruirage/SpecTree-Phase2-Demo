@@ -159,70 +159,7 @@ export function createInitialPrompts() {
 }
 
 export function createInitialJobs() {
-  const now = Date.now();
-  const daysAgo = (days) => new Date(now - days * 24 * 60 * 60 * 1000).toISOString();
-  return [
-    {
-      id: 'job-demo-st-001',
-      type: 'spec_tree',
-      title: 'M000378 スペックツリー',
-      status: 'completed',
-      progress: 100,
-      promptVersionName: '2606_顧客確認版',
-      sessionId: 'st-demo-001',
-      rootFileId: 'file-demo-root-001',
-      rootFileIds: ['file-demo-root-001'],
-      factory: '桶川工場',
-      cacheHit: false,
-      createdAt: daysAgo(2),
-      updatedAt: daysAgo(2),
-    },
-    {
-      id: 'job-demo-st-002',
-      type: 'spec_tree',
-      title: 'M000412 スペックツリー',
-      status: 'completed',
-      progress: 100,
-      promptVersionName: '2606_顧客確認版',
-      sessionId: 'st-demo-002',
-      rootFileId: 'file-demo-root-002',
-      rootFileIds: ['file-demo-root-002'],
-      factory: '安来工場',
-      cacheHit: true,
-      createdAt: daysAgo(4),
-      updatedAt: daysAgo(4),
-    },
-    {
-      id: 'job-demo-st-003',
-      type: 'spec_tree',
-      title: 'M000501 スペックツリー',
-      status: 'failed',
-      progress: 64,
-      promptVersionName: '2606_顧客確認版',
-      sessionId: 'st-demo-003',
-      rootFileId: 'file-demo-root-003',
-      rootFileIds: ['file-demo-root-003'],
-      factory: '安来工場',
-      cacheHit: false,
-      createdAt: daysAgo(6),
-      updatedAt: daysAgo(6),
-    },
-    {
-      id: 'job-demo-st-004',
-      type: 'spec_tree',
-      title: 'M000621 スペックツリー',
-      status: 'cancelled',
-      progress: 38,
-      promptVersionName: '2606_顧客確認版',
-      sessionId: 'st-demo-004',
-      rootFileId: 'file-demo-root-004',
-      rootFileIds: ['file-demo-root-004'],
-      factory: '桶川工場',
-      cacheHit: false,
-      createdAt: daysAgo(8),
-      updatedAt: daysAgo(8),
-    },
-  ];
+  return [];
 }
 
 export { DEFAULT_PROMPTS };
