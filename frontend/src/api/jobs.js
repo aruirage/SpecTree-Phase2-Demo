@@ -19,6 +19,7 @@ function mapJobToPanel(job) {
     retentionDaysLeft: job.retentionDaysLeft ?? null,
     expired: Boolean(job.expired),
     cacheHit: Boolean(job.cacheHit),
+    promptVersionName: job.promptVersionName || '',
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
   };

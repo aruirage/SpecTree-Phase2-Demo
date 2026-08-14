@@ -53,6 +53,13 @@ export const store = {
     uploadedAt: '2026-05-17T00:00:00.000Z',
   },
   prompts: createInitialPrompts(),
+  extractionTemplates: {
+    ams: { templateId: 'ams', templateName: 'AMS テンプレート', templateVersion: 'v1.0' },
+    astm: { templateId: 'astm', templateName: 'ASTM テンプレート', templateVersion: 'v1.0' },
+    dmf: { templateId: 'dmf', templateName: 'DMF テンプレート', templateVersion: 'v1.0' },
+    isajt: { templateId: 'isajt', templateName: 'ISAJT テンプレート', templateVersion: 'v1.0' },
+    default: { templateId: 'default', templateName: '標準テンプレート', templateVersion: 'v1.0' },
+  },
   jobs: createInitialJobs(),
   /** @type {Map<string, object>} */
   specTreeSessions: new Map(),
@@ -178,6 +185,16 @@ export const store = {
 
 function promptKeyForJobType(type) {
   return type === 'spec_tree' ? 'spec_tree.pipeline' : 'clause_compare.extract';
+}
+
+export function normalizeExtractionTemplate(template = {}) {
+  const templateId = template.templateId || template.id || 'default';
+  const fallback = store.extractionTemplates[templateId] || store.extractionTemplates.default;
+  return {
+    templateId: fallback.templateId,
+    templateName: template.templateName || template.name || fallback.templateName,
+    templateVersion: template.templateVersion || template.version || fallback.templateVersion,
+  };
 }
 
 function variantIndex(seed = '', count = 1) {
@@ -370,12 +387,14 @@ export function createSpecTreeSession(files = [], {
   rootFileId = null,
   parentSessionId = null,
   sessionId = nextId('st'),
+  templateByRootFileId = {},
 } = {}) {
   const session = {
     sessionId,
     files,
     rootFileId,
     parentSessionId,
+    templateByRootFileId,
     run: null,
     result: null,
     progress: { running: false, stage: 'queued' },
@@ -388,7 +407,11 @@ export function createSpecTreeSession(files = [], {
 export function cloneSpecTreeSession(sourceSession, rootFileId) {
   return createSpecTreeSession(
     [...(sourceSession.files || [])],
-    { rootFileId, parentSessionId: sourceSession.sessionId },
+    {
+      rootFileId,
+      parentSessionId: sourceSession.sessionId,
+      templateByRootFileId: { ...(sourceSession.templateByRootFileId || {}) },
+    },
   );
 }
 
@@ -407,12 +430,14 @@ export function createSpecTreeJobsForRoots(session, rootFileIds = []) {
       : session;
     targetSession.rootFileId = rootFileId;
     const title = `${rootFileLabel(session, rootFileId)} スペックツリー`;
+    const template = normalizeExtractionTemplate(session.templateByRootFileId?.[rootFileId]);
     const job = addJob({
       type: 'spec_tree',
       title,
       sessionId: targetSession.sessionId,
       rootFileId,
       rootFileIds: roots.length > 1 ? [rootFileId] : roots,
+      template,
     });
     jobs.push({ job, session: targetSession, rootFileId });
   }
@@ -425,6 +450,7 @@ export function createClauseCompareSession({ sessionId = nextId('cc') } = {}) {
     sessionId,
     oldFile: null,
     newFile: null,
+    selectedTemplate: normalizeExtractionTemplate(),
     run: null,
     result: null,
     progress: { running: false, stage: 'queued' },
@@ -481,6 +507,15 @@ export function createSpecTreeResult(context = {}) {
 }
 
 export function createClauseCompareResult(context = {}) {
+  const title = `${context.title || ''}:${context.oldFile?.fileName || ''}:${context.newFile?.fileName || ''}`;
+  if (/AMS2750/i.test(title)) {
+    const result = structuredClone(MOCK_CLAUSE_COMPARE);
+    const variant = CLAUSE_VARIANT_OVERRIDES[0];
+    result.clauses = variant.mutate(structuredClone(result.clauses));
+    result.totalClauses = variant.totalClauses;
+    result.changedClauses = variant.changedClauses;
+    return result;
+  }
   const seed = `${context.sessionId || ''}:${context.title || ''}:${context.newFile?.fileName || ''}`;
   const variant = CLAUSE_VARIANT_OVERRIDES[variantIndex(seed, CLAUSE_VARIANT_OVERRIDES.length)];
   const result = structuredClone(MOCK_CLAUSE_COMPARE);
@@ -690,9 +725,11 @@ export function addJob({
   factory = '',
   ipAddress = '',
   cacheHit = false,
+  template = null,
 }) {
   const promptKey = promptKeyForJobType(type);
   const activeVersion = getActiveVersion(store.prompts[promptKey]);
+  const extractionTemplate = normalizeExtractionTemplate(template);
   const job = {
     id: nextId('job'),
     type,
@@ -700,6 +737,9 @@ export function addJob({
     status: 'queued',
     progress: 0,
     promptVersionName: activeVersion?.name || '—',
+    templateId: extractionTemplate.templateId,
+    templateName: extractionTemplate.templateName,
+    templateVersion: extractionTemplate.templateVersion,
     sessionId,
     rootFileId,
     rootFileIds: rootFileIds || (rootFileId ? [rootFileId] : null),

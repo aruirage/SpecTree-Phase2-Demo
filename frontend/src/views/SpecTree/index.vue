@@ -67,8 +67,15 @@ const mermaidContainer   = ref(null);
 const rightPanelRef = ref(null);
 const MAX_IMAGE_EXPORT_SIDE = 12000;
 const MAX_IMAGE_EXPORT_PIXELS = 80000000;
-const MAX_UPLOAD_FILE_SIZE = 50 * 1024 * 1024;
-const FILE_SIZE_LIMIT_MESSAGE = 'ファイルサイズが50MBを超えています。50MB以下のファイルをアップロードしてください。';
+const MAX_SPEC_TREE_UPLOAD_FILE_SIZE_MB = 30;
+const MAX_SPEC_TREE_UPLOAD_FILE_SIZE = MAX_SPEC_TREE_UPLOAD_FILE_SIZE_MB * 1024 * 1024;
+const MAX_SPEC_TREE_TOTAL_UPLOAD_SIZE_MB = 50;
+const MAX_SPEC_TREE_TOTAL_UPLOAD_SIZE = MAX_SPEC_TREE_TOTAL_UPLOAD_SIZE_MB * 1024 * 1024;
+const MAX_EXCEL_UPLOAD_FILE_SIZE_MB = 5;
+const MAX_EXCEL_UPLOAD_FILE_SIZE = MAX_EXCEL_UPLOAD_FILE_SIZE_MB * 1024 * 1024;
+const SPEC_TREE_FILE_SIZE_LIMIT_MESSAGE = `ファイルサイズが${MAX_SPEC_TREE_UPLOAD_FILE_SIZE_MB}MBを超えています。${MAX_SPEC_TREE_UPLOAD_FILE_SIZE_MB}MB以下のファイルをアップロードしてください。`;
+const SPEC_TREE_TOTAL_SIZE_LIMIT_MESSAGE = `アップロードファイルの合計サイズが${MAX_SPEC_TREE_TOTAL_UPLOAD_SIZE_MB}MBを超えています。合計${MAX_SPEC_TREE_TOTAL_UPLOAD_SIZE_MB}MB以下にしてください。`;
+const EXCEL_FILE_SIZE_LIMIT_MESSAGE = `Excelファイルサイズが${MAX_EXCEL_UPLOAD_FILE_SIZE_MB}MBを超えています。${MAX_EXCEL_UPLOAD_FILE_SIZE_MB}MB以下のファイルをアップロードしてください。`;
 const UI_FONT_FAMILY = '"Noto Sans JP", sans-serif';
 const SPEC_TREE_RECOVERY_KEY = 'daikin:spec_tree:recovery:v1';
 let generateAbortController = null;
@@ -268,6 +275,9 @@ async function loadExcelConfig() {
 }
 
 async function uploadExcelConfig(kind, file) {
+  if (file.size > MAX_EXCEL_UPLOAD_FILE_SIZE) {
+    throw new Error(EXCEL_FILE_SIZE_LIMIT_MESSAGE);
+  }
   const endpoint = kind === 'supplement' ? '/api/spec-tree/upload/supplement' : '/api/spec-tree/upload/deletion';
   const formData = new FormData();
   formData.append('file', file);
@@ -587,6 +597,12 @@ function isAcceptedSpecTreeFile(file) {
   return SPEC_TREE_ACCEPTED_EXTENSIONS.some(ext => name.endsWith(ext)) || SPEC_TREE_ACCEPTED_MIME_TYPES.has(file?.type);
 }
 
+function totalSpecTreeUploadSize(nextFiles = []) {
+  const merged = new Map(uploadedFiles.value.map((file) => [file.name, file.size || 0]));
+  nextFiles.forEach((file) => merged.set(file.name, file.size || 0));
+  return Array.from(merged.values()).reduce((sum, size) => sum + Number(size || 0), 0);
+}
+
 async function handleFiles(files) {
   if (!canUpload.value) {
     isDragging.value = false;
@@ -594,8 +610,15 @@ async function handleFiles(files) {
   }
   const validFiles = files.filter(isAcceptedSpecTreeFile);
   if (validFiles.length === 0) return;
-  if (validFiles.some(file => file.size > MAX_UPLOAD_FILE_SIZE)) {
-    error.value = FILE_SIZE_LIMIT_MESSAGE;
+  if (validFiles.some(file => file.size > MAX_SPEC_TREE_UPLOAD_FILE_SIZE)) {
+    error.value = SPEC_TREE_FILE_SIZE_LIMIT_MESSAGE;
+    status.value = '';
+    uploading.value = false;
+    uploadProgress.value = 0;
+    return;
+  }
+  if (totalSpecTreeUploadSize(validFiles) > MAX_SPEC_TREE_TOTAL_UPLOAD_SIZE) {
+    error.value = SPEC_TREE_TOTAL_SIZE_LIMIT_MESSAGE;
     status.value = '';
     uploading.value = false;
     uploadProgress.value = 0;
@@ -757,7 +780,11 @@ async function handleGenerate() {
     const startRes = await fetch('/api/spec-tree/generate/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId: sessionId.value, rootFileIds: rootFileIds.value, clientRunId: activeGenerateRunId }),
+      body: JSON.stringify({
+        sessionId: sessionId.value,
+        rootFileIds: rootFileIds.value,
+        clientRunId: activeGenerateRunId,
+      }),
     });
     if (requestSeq !== generateRequestSeq) return;
     if (!startRes.ok) {
@@ -1115,7 +1142,9 @@ async function restoreSpecTreeRecovery() {
   if (!saved?.sessionId || saved.feature !== 'spec_tree') return;
   restoringSpecTreeRecovery = true;
   sessionId.value = saved.sessionId;
-  uploadedFiles.value = Array.isArray(saved.uploadedFiles) ? saved.uploadedFiles : [];
+  uploadedFiles.value = Array.isArray(saved.uploadedFiles)
+    ? saved.uploadedFiles
+    : [];
   rootFileIds.value = Array.isArray(saved.rootFileIds) ? saved.rootFileIds : [];
   activeGenerateRunId = saved.runId || null;
   error.value = '';
@@ -1377,7 +1406,7 @@ watch(rootFileIds, () => {
               <line x1="12" y1="12" x2="12" y2="21" />
               <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3" />
             </svg>
-            <p class="upload-hint-primary">PDF/TIF対応・1ファイル上限50MB</p>
+            <p class="upload-hint-primary">PDF/TIF・上限{{ MAX_SPEC_TREE_UPLOAD_FILE_SIZE_MB }}MB/ファイル</p>
             <div class="upload-actions">
               <button
                 class="btn btn-primary btn-sm upload-btn"
@@ -1462,7 +1491,9 @@ watch(rootFileIds, () => {
               </svg>
               <div class="file-info">
                 <span class="file-name" :title="file.name">{{ file.name }}</span>
-                <span class="file-size">{{ formatBytes(file.size) }}</span>
+                <div class="file-subline">
+                  <span class="file-size">{{ formatBytes(file.size) }}</span>
+                </div>
               </div>
               <button
                 type="button"
@@ -1512,7 +1543,7 @@ watch(rootFileIds, () => {
               </svg>
               <div class="excel-info">
                 <span class="excel-name">補完Excel</span>
-                <span class="excel-current">現在: {{ excelSupplementName || 'なし' }}</span>
+                <span class="excel-current">現在: {{ excelSupplementName || 'なし' }}・上限{{ MAX_EXCEL_UPLOAD_FILE_SIZE_MB }}MB</span>
               </div>
               <button type="button" class="btn btn-outline btn-sm excel-button" :disabled="!canUpload" @click="supplementInputRef?.click()">
                 {{ excelSupplementName ? '変更' : 'アップロード' }}
@@ -1527,7 +1558,7 @@ watch(rootFileIds, () => {
               </svg>
               <div class="excel-info">
                 <span class="excel-name">削除Excel</span>
-                <span class="excel-current">現在: {{ excelDeletionName || 'なし' }}</span>
+                <span class="excel-current">現在: {{ excelDeletionName || 'なし' }}・上限{{ MAX_EXCEL_UPLOAD_FILE_SIZE_MB }}MB</span>
               </div>
               <button type="button" class="btn btn-outline btn-sm excel-button" :disabled="!canUpload" @click="deletionInputRef?.click()">
                 {{ excelDeletionName ? '変更' : 'アップロード' }}
@@ -2071,7 +2102,10 @@ watch(rootFileIds, () => {
   font-weight: 600;
   color: #1e293b;
   margin: 0 0 10px;
-  white-space: nowrap;
+  line-height: 1.35;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: center;
 }
 
 .upload-actions {
@@ -2176,9 +2210,9 @@ watch(rootFileIds, () => {
 .file-item {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   min-height: 34px;
-  padding: 3px 8px 3px 5px;
+  padding: 3px 6px 3px 5px;
   background: #f8fafc;
   border: 1px solid transparent;
   border-radius: 6px;
@@ -2200,8 +2234,8 @@ watch(rootFileIds, () => {
 }
 
 .root-toggle-indicator {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   border: 1px solid #cbd5e1;
   border-radius: 5px;
   background: #ffffff;
@@ -2210,7 +2244,7 @@ watch(rootFileIds, () => {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 700;
   font-family: inherit;
 
@@ -2218,7 +2252,7 @@ watch(rootFileIds, () => {
     background: #0076bf;
     border-color: #0076bf;
     color: #ffffff;
-    width: 28px;
+    width: 24px;
     gap: 2px;
   }
 }
@@ -2229,14 +2263,14 @@ watch(rootFileIds, () => {
 }
 
 .root-tree-icon {
-  width: 9px;
-  height: 9px;
+  width: 8px;
+  height: 8px;
   flex-shrink: 0;
 }
 
 .file-icon {
-  width: 13px;
-  height: 13px;
+  width: 12px;
+  height: 12px;
   color: #0076bf;
   flex-shrink: 0;
 }
@@ -2251,7 +2285,7 @@ watch(rootFileIds, () => {
 
 .file-name {
   font-size: 11px;
-  line-height: 1.15;
+  line-height: 1.1;
   color: #1e293b;
   white-space: nowrap;
   overflow: hidden;
@@ -2259,15 +2293,22 @@ watch(rootFileIds, () => {
   font-weight: 600;
 }
 
+.file-subline {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
 .file-size {
-  font-size: 10px;
+  font-size: 9px;
   line-height: 1.1;
   color: #94a3b8;
 }
 
 .file-remove-btn {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   padding: 0;
   border: none;
   background: transparent;
@@ -2281,8 +2322,8 @@ watch(rootFileIds, () => {
   transition: all 0.2s ease;
 
   svg {
-    width: 11px;
-    height: 11px;
+    width: 10px;
+    height: 10px;
   }
 
   &:hover:not(:disabled) {

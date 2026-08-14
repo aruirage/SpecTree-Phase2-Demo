@@ -75,11 +75,12 @@ const showImageColumns = true;
 const revSectionColspan = computed(() => (showImageColumns ? 4 : 3));
 const diffSegmentCache = new Map();
 const MAX_TOKEN_DIFF_CELLS = 160000;
-const MAX_UPLOAD_FILE_SIZE = 50 * 1024 * 1024;
+const MAX_UPLOAD_FILE_SIZE_MB = 30;
+const MAX_UPLOAD_FILE_SIZE = MAX_UPLOAD_FILE_SIZE_MB * 1024 * 1024;
 const CLAUSE_RENDER_BATCH_SIZE = 50;
 const CLAUSE_SCROLL_THRESHOLD = 360;
 const CLAUSE_SCROLL_BOTTOM_EPSILON = 4;
-const FILE_SIZE_LIMIT_MESSAGE = 'ファイルサイズが50MBを超えています。50MB以下のファイルをアップロードしてください。';
+const FILE_SIZE_LIMIT_MESSAGE = `ファイルサイズが${MAX_UPLOAD_FILE_SIZE_MB}MBを超えています。${MAX_UPLOAD_FILE_SIZE_MB}MB以下のファイルをアップロードしてください。`;
 const CLAUSE_COMPARE_RECOVERY_KEY = 'daikin:clause-compare:recovery:v1';
 let runAbortController = null;
 let runRequestSeq = 0;
@@ -290,7 +291,12 @@ async function uploadFile(file, fileType) {
     }
     const data = await res.json();
     if (!sharedSessionId.value) sharedSessionId.value = data.sessionId;
-    setFile({ sessionId: data.sessionId, fileId: data.fileId, fileName: data.fileName, fileType: data.fileType });
+    setFile({
+      sessionId: data.sessionId,
+      fileId: data.fileId,
+      fileName: data.fileName,
+      fileType: data.fileType,
+    });
     saveClauseCompareRecovery(false);
   } catch (e) {
     error.value = formatCaughtError(e, 'Upload failed.');
@@ -1030,6 +1036,10 @@ async function restoreClauseCompareRecovery() {
   if (running.value || result.value) return;
   const saved = loadClauseCompareRecovery();
   if (!saved?.sessionId || saved.feature !== 'clause_compare') return;
+  if (!saved.running) {
+    clearClauseCompareRecovery();
+    return;
+  }
   sharedSessionId.value = saved.sessionId;
   oldFile.value = saved.oldFile || null;
   newFile.value = saved.newFile || null;
@@ -1055,25 +1065,6 @@ async function restoreClauseCompareRecovery() {
       status.value = `比較完了：合計 ${data.totalClauses} 条項、${data.changedClauses} 件変更`;
       saveClauseCompareRecovery(false, { runId: saved.runId, jobId: saved.jobId });
       return;
-    }
-
-    const res = await fetch(`/api/clause-compare/result?sessionId=${encodeURIComponent(sharedSessionId.value)}`, { cache: 'no-store' });
-    if (requestSeq !== runRequestSeq) return;
-    if (res.ok) {
-      const data = await res.json();
-      if (data?.clauses) {
-        upsertClauseResultTab({
-          sessionId: sharedSessionId.value,
-          jobId: saved.jobId || '',
-          runId: saved.runId || '',
-          label: formatClauseResultTabLabel({ name: newFile.value?.fileName || newFile.value?.name || '比較結果' }),
-          closable: true,
-        }, data);
-        status.value = `比較完了：合計 ${data.totalClauses} 条項、${data.changedClauses} 件変更`;
-        saveClauseCompareRecovery(false, { runId: saved.runId, jobId: saved.jobId });
-      }
-    } else if (res.status === 404) {
-      resetClauseCompareSessionState();
     }
   } catch (e) {
     if (requestSeq !== runRequestSeq) return;
@@ -1203,7 +1194,7 @@ onBeforeUnmount(() => {
               </svg>
               <div class="upload-zone-info">
                 <span class="upload-zone-text">旧バージョン文書</span>
-                <span class="upload-zone-sub">PDF対応・1ファイル上限50MB</span>
+                <span class="upload-zone-sub">PDF・上限{{ MAX_UPLOAD_FILE_SIZE_MB }}MB/ファイル</span>
               </div>
             </template>
           </label>
@@ -1243,7 +1234,7 @@ onBeforeUnmount(() => {
               </svg>
               <div class="upload-zone-info">
                 <span class="upload-zone-text">新バージョン文書</span>
-                <span class="upload-zone-sub">PDF対応・1ファイル上限50MB</span>
+                <span class="upload-zone-sub">PDF・上限{{ MAX_UPLOAD_FILE_SIZE_MB }}MB/ファイル</span>
               </div>
             </template>
           </label>
@@ -2261,6 +2252,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  flex: 1;
 }
 
 .upload-zone-filename {

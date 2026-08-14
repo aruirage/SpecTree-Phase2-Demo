@@ -15,10 +15,22 @@ import {
   cacheResult,
   enqueueTask,
   getFactoryFromIP,
+  normalizeExtractionTemplate,
 } from '../store.js';
 import { normalizeUploadedFileName } from '../utils/fileNames.js';
 
-const upload = multer({ storage: multer.memoryStorage() });
+const MB = 1024 * 1024;
+const SPEC_TREE_FILE_SIZE_LIMIT_MB = 30;
+const SPEC_TREE_TOTAL_SIZE_LIMIT_MB = 50;
+const EXCEL_FILE_SIZE_LIMIT_MB = 5;
+const specTreeUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: SPEC_TREE_FILE_SIZE_LIMIT_MB * MB },
+});
+const excelUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: EXCEL_FILE_SIZE_LIMIT_MB * MB },
+});
 const router = Router();
 const EXPORT_FONT_NAME = 'Noto Sans JP';
 const SPEC_TREE_EXPORT_ROWS = [
@@ -148,6 +160,14 @@ function resolveRootFileIds(body = {}) {
   return [];
 }
 
+function resolveTemplateByRootFileId(body = {}) {
+  const entries = Array.isArray(body.templateAssignments) ? body.templateAssignments : [];
+  return Object.fromEntries(entries.map((entry) => [
+    entry.rootFileId,
+    normalizeExtractionTemplate(entry),
+  ]).filter(([rootFileId]) => Boolean(rootFileId)));
+}
+
 function ensureSpecTreeSession(sessionId) {
   if (!sessionId) return null;
   const existing = store.specTreeSessions.get(sessionId);
@@ -170,7 +190,16 @@ function ensureSpecTreeSession(sessionId) {
   return session;
 }
 
-function startSpecTreeJobs(sourceSession, rootIds, { clientRunId, factory, ipAddress } = {}) {
+function startSpecTreeJobs(sourceSession, rootIds, {
+  clientRunId,
+  factory,
+  ipAddress,
+  templateByRootFileId = {},
+} = {}) {
+  sourceSession.templateByRootFileId = {
+    ...(sourceSession.templateByRootFileId || {}),
+    ...templateByRootFileId,
+  };
   const entries = createSpecTreeJobsForRoots(sourceSession, rootIds);
   const isBatch = rootIds.length > 1;
   const started = [];
@@ -181,7 +210,12 @@ function startSpecTreeJobs(sourceSession, rootIds, { clientRunId, factory, ipAdd
     
     // キャッシュをチェック
     const files = targetSession.files || [];
-    const cached = getCachedResult('spec_tree', files, { rootFileId });
+    const template = normalizeExtractionTemplate(targetSession.templateByRootFileId?.[rootFileId]);
+    const cached = getCachedResult('spec_tree', files, {
+      rootFileId,
+      templateId: template.templateId,
+      templateVersion: template.templateVersion,
+    });
     
     if (cached) {
       // キャッシュヒット！結果を直接返す
@@ -217,6 +251,7 @@ function startSpecTreeJobs(sourceSession, rootIds, { clientRunId, factory, ipAdd
       // キャッシュにないのでタスクをキューに追加
       targetSession.factory = factory || '安来工場';
       targetSession.ipAddress = ipAddress;
+      targetSession.selectedTemplate = template;
       job.factory = factory || '安来工場';
       job.ipAddress = ipAddress;
       
@@ -224,7 +259,11 @@ function startSpecTreeJobs(sourceSession, rootIds, { clientRunId, factory, ipAdd
         type: 'spec_tree',
         session: targetSession,
         files,
-        options: { rootFileId },
+        options: {
+          rootFileId,
+          templateId: template.templateId,
+          templateVersion: template.templateVersion,
+        },
         factory,
         ipAddress,
         runId,
@@ -257,7 +296,8 @@ router.get('/excel', (_req, res) => {
   });
 });
 
-router.put('/upload/documents', upload.array('files'), (req, res) => {
+router.put('/upload/documents', specTreeUpload.array('files'), (req, res) => {
+  if (!validateSpecTreeTotalSize(req, res)) return;
   const files = (req.files || []).map(fileMeta);
   const session = createSpecTreeSession(files);
   res.json({ sessionId: session.sessionId, files });
@@ -272,7 +312,20 @@ function getClientInfo(req) {
   return { ipAddress, factory };
 }
 
-router.put('/upload/supplement', upload.single('file'), (req, res) => {
+function totalFileSize(files = []) {
+  return files.reduce((sum, file) => sum + Number(file.size || 0), 0);
+}
+
+function validateSpecTreeTotalSize(req, res) {
+  if (totalFileSize(req.files || []) <= SPEC_TREE_TOTAL_SIZE_LIMIT_MB * MB) return true;
+  res.status(413).json({
+    code: 'UPLOAD_TOTAL_SIZE_LIMIT',
+    error: `total file size must be ${SPEC_TREE_TOTAL_SIZE_LIMIT_MB}MB or less`,
+  });
+  return false;
+}
+
+router.put('/upload/supplement', excelUpload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'file is required' });
   const { ipAddress, factory } = getClientInfo(req);
   
@@ -293,7 +346,7 @@ router.put('/upload/supplement', upload.single('file'), (req, res) => {
   res.json(store.excelConfig.supplement);
 });
 
-router.put('/upload/deletion', upload.single('file'), (req, res) => {
+router.put('/upload/deletion', excelUpload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'file is required' });
   const { ipAddress, factory } = getClientInfo(req);
   
@@ -317,12 +370,13 @@ router.put('/upload/deletion', upload.single('file'), (req, res) => {
 router.post('/jobs', (req, res) => {
   const { sessionId } = req.body || {};
   const rootIds = resolveRootFileIds(req.body);
+  const templateByRootFileId = resolveTemplateByRootFileId(req.body);
   const session = store.specTreeSessions.get(sessionId);
   if (!session) return res.status(404).json({ error: 'session not found' });
   if (rootIds.length === 0) return res.status(400).json({ error: 'rootFileId or rootFileIds is required' });
 
   const { ipAddress, factory } = getClientInfo(req);
-  const jobs = startSpecTreeJobs(session, rootIds, { factory, ipAddress });
+  const jobs = startSpecTreeJobs(session, rootIds, { factory, ipAddress, templateByRootFileId });
   res.status(202).json({
     jobs,
     jobId: jobs[0]?.jobId,
@@ -333,7 +387,8 @@ router.post('/jobs', (req, res) => {
 
 // ── Phase 1 compatible routes (existing frontend) ─────────────────────────
 
-router.post('/upload', upload.array('files'), (req, res) => {
+router.post('/upload', specTreeUpload.array('files'), (req, res) => {
+  if (!validateSpecTreeTotalSize(req, res)) return;
   const files = (req.files || []).map(fileMeta);
   const session = createSpecTreeSession(files);
   res.json({ sessionId: session.sessionId, files });
@@ -342,6 +397,7 @@ router.post('/upload', upload.array('files'), (req, res) => {
 router.post('/generate/start', (req, res) => {
   const { sessionId, clientRunId } = req.body || {};
   const rootIds = resolveRootFileIds(req.body);
+  const templateByRootFileId = resolveTemplateByRootFileId(req.body);
   const session = ensureSpecTreeSession(sessionId);
   if (!session) return res.status(404).json({ error: 'session not found', code: 404 });
   if (rootIds.length === 0) {
@@ -350,7 +406,7 @@ router.post('/generate/start', (req, res) => {
 
   try {
     const { ipAddress, factory } = getClientInfo(req);
-    const jobs = startSpecTreeJobs(session, rootIds, { clientRunId, factory, ipAddress });
+    const jobs = startSpecTreeJobs(session, rootIds, { clientRunId, factory, ipAddress, templateByRootFileId });
     const first = jobs[0];
     res.status(202).json({
       jobs,
@@ -430,6 +486,21 @@ router.get('/export', (req, res) => {
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', contentDisposition(`${downloadBaseName}.csv`));
   res.send(csv);
+});
+
+router.use((err, _req, res, next) => {
+  if (!(err instanceof multer.MulterError)) {
+    next(err);
+    return;
+  }
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    res.status(413).json({
+      code: 'UPLOAD_FILE_SIZE_LIMIT',
+      error: 'uploaded file is too large',
+    });
+    return;
+  }
+  res.status(400).json({ code: err.code, error: err.message });
 });
 
 export default router;

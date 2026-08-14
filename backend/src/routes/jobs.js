@@ -194,6 +194,11 @@ router.post('/:id/rerun', (req, res) => {
     rootFileIds: source.rootFileIds,
     factory: source.factory,
     ipAddress: source.ipAddress,
+    template: {
+      templateId: source.templateId,
+      templateName: source.templateName,
+      templateVersion: source.templateVersion,
+    },
   });
   const runId = enqueueJobRun(job, session, context);
   res.status(202).json({

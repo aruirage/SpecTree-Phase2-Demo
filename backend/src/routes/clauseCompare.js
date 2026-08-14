@@ -16,10 +16,16 @@ import {
   enqueueTask,
   getFactoryFromIP,
   appendSystemEvent,
+  normalizeExtractionTemplate,
 } from '../store.js';
 import { normalizeUploadedFileName } from '../utils/fileNames.js';
 
-const upload = multer({ storage: multer.memoryStorage() });
+const MB = 1024 * 1024;
+const CLAUSE_COMPARE_FILE_SIZE_LIMIT_MB = 30;
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: CLAUSE_COMPARE_FILE_SIZE_LIMIT_MB * MB },
+});
 const router = Router();
 const EXPORT_FONT_NAME = 'Noto Sans JP';
 const REPORT_COLUMNS = [
@@ -420,7 +426,7 @@ router.post('/upload', upload.single('file'), (req, res) => {
   });
 });
 
-function beginRun(session, clientRunId, factory, ipAddress) {
+function beginRun(session, clientRunId, factory, ipAddress, templateOptions = {}) {
   session.oldFile ||= {
     fileId: 'file-old-restored',
     fileName: 'old.pdf',
@@ -439,9 +445,21 @@ function beginRun(session, clientRunId, factory, ipAddress) {
   const files = [];
   if (session.oldFile) files.push(session.oldFile);
   if (session.newFile) files.push(session.newFile);
+  const selectedTemplate = normalizeExtractionTemplate(
+    templateOptions.selectedTemplate
+    || templateOptions.newTemplate
+    || templateOptions.oldTemplate
+    || session.selectedTemplate
+  );
+  session.oldTemplate = normalizeExtractionTemplate(templateOptions.oldTemplate || selectedTemplate);
+  session.newTemplate = normalizeExtractionTemplate(templateOptions.newTemplate || selectedTemplate);
+  session.selectedTemplate = selectedTemplate;
   
   // キャッシュをチェック
-  const cached = getCachedResult('clause_compare', files);
+  const cached = getCachedResult('clause_compare', files, {
+    templateId: selectedTemplate.templateId,
+    templateVersion: selectedTemplate.templateVersion,
+  });
   
   if (cached) {
     // キャッシュヒット
@@ -452,6 +470,7 @@ function beginRun(session, clientRunId, factory, ipAddress) {
       factory,
       ipAddress,
       cacheHit: true,
+      template: selectedTemplate,
     });
     job.status = 'completed';
     job.progress = 100;
@@ -489,6 +508,7 @@ function beginRun(session, clientRunId, factory, ipAddress) {
     sessionId: session.sessionId,
     factory,
     ipAddress,
+    template: selectedTemplate,
   });
   const runId = clientRunId || nextId('run');
   
@@ -499,7 +519,10 @@ function beginRun(session, clientRunId, factory, ipAddress) {
     type: 'clause_compare',
     session,
     files,
-    options: {},
+    options: {
+      templateId: selectedTemplate.templateId,
+      templateVersion: selectedTemplate.templateVersion,
+    },
     factory,
     ipAddress,
     runId,
@@ -519,20 +542,20 @@ function beginRun(session, clientRunId, factory, ipAddress) {
 }
 
 router.post('/run/start', (req, res) => {
-  const { sessionId, clientRunId } = req.body || {};
+  const { sessionId, clientRunId, oldTemplate, newTemplate, selectedTemplate } = req.body || {};
   const session = ensureClauseCompareSession(sessionId);
   if (!session) return res.status(404).json({ error: 'session not found' });
   const { ipAddress, factory } = getClientInfo(req);
-  const accepted = beginRun(session, clientRunId, factory, ipAddress);
+  const accepted = beginRun(session, clientRunId, factory, ipAddress, { oldTemplate, newTemplate, selectedTemplate });
   res.status(202).json(accepted);
 });
 
 router.post('/run', (req, res) => {
-  const { sessionId } = req.body || {};
+  const { sessionId, oldTemplate, newTemplate, selectedTemplate } = req.body || {};
   const session = ensureClauseCompareSession(sessionId);
   if (!session) return res.status(404).json({ error: 'session not found' });
   const { ipAddress, factory } = getClientInfo(req);
-  const accepted = beginRun(session, null, factory, ipAddress);
+  const accepted = beginRun(session, null, factory, ipAddress, { oldTemplate, newTemplate, selectedTemplate });
   res.status(202).json(accepted);
 });
 
@@ -600,6 +623,21 @@ router.get('/images/export', (req, res) => {
     .catch((err) => {
       res.status(500).json({ error: err.message || 'image export failed' });
     });
+});
+
+router.use((err, _req, res, next) => {
+  if (!(err instanceof multer.MulterError)) {
+    next(err);
+    return;
+  }
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    res.status(413).json({
+      code: 'UPLOAD_FILE_SIZE_LIMIT',
+      error: 'uploaded file is too large',
+    });
+    return;
+  }
+  res.status(400).json({ code: err.code, error: err.message });
 });
 
 export default router;
