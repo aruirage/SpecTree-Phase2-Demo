@@ -803,10 +803,10 @@ async function handleGenerate() {
 
     const uploadedFileNames = new Map(uploadedFiles.value.map((file) => [file.id, file.name]));
     clearSpecTreeUploadInputs();
-    activeSpecTreeTab.value = 'tasks';
     activeTaskStatusTab.value = 'all';
     startGenerateProgress(jobs[0].sessionId, jobs[0].runId || activeGenerateRunId);
     saveSpecTreeRecovery(true, jobs[0]);
+    await loadTaskJobs();
 
     const results = await waitForGeneratedSpecTreeResultsForJobs({
       jobs,
@@ -848,8 +848,8 @@ async function handleGenerate() {
     error.value = formatCaughtError(e, 'スペックツリーの生成に失敗しました');
   } finally {
     if (requestSeq === generateRequestSeq) {
+      await completeGenerateProgress();
       generating.value = false;
-      completeGenerateProgress();
     }
   }
 }
@@ -1165,7 +1165,7 @@ async function restoreSpecTreeRecovery() {
         stopOnNotFound: true,
       });
       if (!result || requestSeq !== generateRequestSeq) return;
-      completeGenerateProgress();
+      await completeGenerateProgress();
       treeData.value = normalizeSpecTreeResult(result);
       warnIfSpecTreeHasNoChildNodes(treeData.value);
       status.value = `スペックツリーの生成が完了しました。合計 ${treeData.value.nodeCount} ノード`;

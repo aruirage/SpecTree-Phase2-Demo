@@ -15,6 +15,7 @@ import {
   LOG_FEATURE_FILTERS,
   paginateItems,
   sortSystemLogs,
+  summarizeFactoryUsage,
 } from './systemLogs.js';
 
 assert.deepEqual(LOG_FEATURE_FILTERS.map((item) => item.text), [
@@ -106,3 +107,8 @@ assert.deepEqual(sortSystemLogs(sampleLogs.slice(0, 3), { prop: 'pages', order: 
 assert.deepEqual(sortSystemLogs(sampleLogs.slice(0, 3), { prop: 'pages', order: 'descending' }).map((log) => log.pages), [92, 86, 42]);
 assert.deepEqual(sortSystemLogs(sampleLogs.slice(0, 3), { prop: 'totalPages', order: 'ascending' }).map((log) => log.totalPages), [86, 92, 118]);
 assert.deepEqual(sortSystemLogs(sampleLogs.slice(0, 3), { prop: 'totalPages', order: 'descending' }).map((log) => log.totalPages), [118, 92, 86]);
+assert.deepEqual(summarizeFactoryUsage(sampleLogs, '桶川工場'), {
+  factoryPages: 128,
+  allFactoryPages: 220,
+  factoryShare: 58.2,
+});

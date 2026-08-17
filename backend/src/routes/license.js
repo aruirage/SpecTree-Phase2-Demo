@@ -177,6 +177,7 @@ function buildSettlementCounterPayload(fromDate, toDate) {
     licenseFileName: store.license.fileName,
     billingMetric: 'total_pages',
     billingPeriod: {
+      month: period.startDate.slice(0, 7),
       from: fromDate || period.startDate,
       to: toDate || period.endDate,
     },

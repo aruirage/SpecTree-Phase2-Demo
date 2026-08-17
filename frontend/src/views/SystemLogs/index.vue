@@ -19,6 +19,7 @@ import {
   getVisiblePageNumbers,
   paginateItems,
   sortSystemLogs,
+  summarizeFactoryUsage,
 } from '@/utils/systemLogs';
 
 const logs = ref([]);
@@ -102,20 +103,11 @@ const factoryLogs = computed(() => {
   return filteredLogs.value.filter((log) => log.site === factory);
 });
 
-const factoryPages = computed(() => {
-  return factoryLogs.value.reduce((sum, log) => sum + formatLogTotalPageCount(log), 0);
-});
-
-const allFactoryPages = computed(() => {
-  return filteredLogs.value.reduce((sum, log) => sum + formatLogTotalPageCount(log), 0);
-});
-
-const factoryShare = computed(() => {
-  if (!allFactoryPages.value) return 0;
-  return Math.round((factoryPages.value / allFactoryPages.value) * 1000) / 10;
-});
-
 const filteredLogs = computed(() => filterSystemLogs(logs.value, appliedFilters.value));
+const usageSummary = computed(() => summarizeFactoryUsage(filteredLogs.value, factoryInfo.value?.factory));
+const factoryPages = computed(() => usageSummary.value.factoryPages);
+const allFactoryPages = computed(() => usageSummary.value.allFactoryPages);
+const factoryShare = computed(() => usageSummary.value.factoryShare);
 const factoryFilterOptions = computed(() => getLogFactoryOptions(logs.value));
 const sortedLogs = computed(() => sortSystemLogs(filteredLogs.value, tableSort.value));
 const totalLogPages = computed(() => Math.max(1, Math.ceil(filteredLogs.value.length / pageSize.value)));
@@ -189,22 +181,6 @@ function handleSortChange({ prop, order }) {
           <div class="stat-number">
             <span class="stat-value">{{ factoryShare }}</span>
             <span class="stat-unit">%</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- キュー状態表示 -->
-    <div class="system-status-section" v-if="queueStatus && queueStatus.queue.length > 0">
-      <h3 class="section-title">タスクキュー</h3>
-      <div class="queue-list">
-        <div class="queue-item" v-for="item in queueStatus.queue" :key="item.runId">
-          <div class="queue-item-title">
-            {{ item.type === 'spec_tree' ? 'スペックツリー' : 'スペック新旧比較' }}
-          </div>
-          <div class="queue-item-meta">
-            <span class="badge" style="background: #0066cc">待ち</span>
-            <span class="queue-factory">{{ item.factory }}</span>
           </div>
         </div>
       </div>
@@ -548,59 +524,11 @@ function handleSortChange({ prop, order }) {
   white-space: nowrap;
 }
 
-.system-status-section {
-  margin-bottom: 24px;
-}
-
 .section-title {
   font-size: var(--font-size-title);
   font-weight: 600;
   color: #1e293b;
   margin: 0 0 12px 0;
-}
-
-.queue-list {
-  background: white;
-  border-radius: 8px;
-  padding: 16px;
-  box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.05);
-}
-
-.queue-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 12px 0;
-  border-bottom: 1px solid #e4e7ed;
-  
-  &:last-child {
-    border-bottom: none;
-  }
-}
-
-.queue-item-title {
-  font-weight: 500;
-  color: #303133;
-}
-
-.queue-item-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.badge {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 12px;
-  font-weight: 500;
-  color: white;
-}
-
-.queue-factory {
-  font-size: 13px;
-  color: #606266;
 }
 
 .logs-table-container {

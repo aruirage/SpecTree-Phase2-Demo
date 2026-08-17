@@ -58,6 +58,23 @@ export function isUsageLog(row) {
   return formatLogTotalPageCount(row) > 0;
 }
 
+export function summarizeFactoryUsage(logs = [], factory = '') {
+  const usageLogs = logs.filter(isUsageLog);
+  const allFactoryPages = usageLogs.reduce((sum, log) => sum + formatLogPageCount(log), 0);
+  const factoryPages = usageLogs
+    .filter((log) => factory && log?.site === factory)
+    .reduce((sum, log) => sum + formatLogPageCount(log), 0);
+  const factoryShare = allFactoryPages
+    ? Math.round((factoryPages / allFactoryPages) * 1000) / 10
+    : 0;
+
+  return {
+    factoryPages,
+    allFactoryPages,
+    factoryShare,
+  };
+}
+
 export function sortSystemLogs(logs, sort = {}) {
   const order = sort?.order;
   const direction = order === 'ascending' ? 1 : order === 'descending' ? -1 : 0;

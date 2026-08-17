@@ -44,7 +44,7 @@ export const store = {
     status: 'active',
     expiresAt: '2026-08-17',
     monthlyUsed: 2000,
-    monthlyQuota: 15000,
+    monthlyQuota: 5000,
     /** 履歴データ保持日数（固定 45 日） */
     retentionDays: 45,
     /** 保持期間・課金期間の起算日（ライセンス適用開始 / アップロード日） */
@@ -74,6 +74,7 @@ export const store = {
   ipFactoryMap: {
     '192.168.1.10': '桶川工場',
     '192.168.2.10': '安来工場',
+    '127.0.0.1': '安来工場',
   },
   // 結果キャッシュ（フィンガープリント → セッションID）
   /** @type {Map<string, object>} */
@@ -84,6 +85,132 @@ export const store = {
   runningTasks: [],
   maxConcurrentTasks: 1, // 同時に実行できるGPUタスク数
   systemEvents: [
+    {
+      site: '安来工場',
+      ipAddress: '127.0.0.1',
+      at: '2026-08-17T09:25:00',
+      actionType: 'タスク開始',
+      feature: 'スペックツリー',
+      processCount: 1,
+      pages: 0,
+      totalPages: 124,
+      durationMinutes: 0,
+      detail: 'ツリー作成',
+      operator: 'system',
+      note: 'M000501.pdf',
+    },
+    {
+      site: '安来工場',
+      ipAddress: '127.0.0.1',
+      at: '2026-08-17T09:21:00',
+      actionType: 'タスク開始',
+      feature: '条項比較',
+      processCount: 2,
+      pages: 0,
+      totalPages: 86,
+      durationMinutes: 0,
+      detail: '差分抽出',
+      operator: 'system',
+      note: 'JIS-H-4600_旧.pdf;JIS-H-4600_新.pdf',
+    },
+    {
+      site: '安来工場',
+      ipAddress: '127.0.0.1',
+      at: '2026-08-16T15:42:00',
+      actionType: 'タスク完了',
+      feature: 'スペックツリー',
+      processCount: 3,
+      pages: 180,
+      totalPages: 180,
+      durationMinutes: 34,
+      detail: 'ツリー作成',
+      operator: 'user02',
+      note: 'M000378.pdf;M000412.pdf;M000501.pdf',
+    },
+    {
+      site: '安来工場',
+      ipAddress: '127.0.0.1',
+      at: '2026-08-15T11:08:00',
+      actionType: 'タスク完了',
+      feature: '条項比較',
+      processCount: 2,
+      pages: 96,
+      totalPages: 96,
+      durationMinutes: 22,
+      detail: '差分抽出',
+      operator: 'user03',
+      note: 'AS9100D.pdf;AS9100E.pdf',
+    },
+    {
+      site: '安来工場',
+      ipAddress: '127.0.0.1',
+      at: '2026-08-14T16:47:00',
+      actionType: 'タスク失敗',
+      feature: '条項比較',
+      processCount: 2,
+      pages: 0,
+      totalPages: 72,
+      durationMinutes: 5,
+      detail: '差分抽出',
+      operator: 'user04',
+      note: 'AMS4911A.pdf;AMS4911B.pdf',
+    },
+    {
+      site: '安来工場',
+      ipAddress: '127.0.0.1',
+      at: '2026-08-13T10:24:00',
+      actionType: 'タスク中止',
+      feature: 'スペックツリー',
+      processCount: 1,
+      pages: 41,
+      totalPages: 92,
+      durationMinutes: 8,
+      detail: 'ツリー作成',
+      operator: 'user05',
+      note: 'P2TF1.pdf',
+    },
+    {
+      site: '桶川工場',
+      ipAddress: '192.168.1.10',
+      at: '2026-08-12T09:45:00',
+      actionType: 'タスク完了',
+      feature: 'スペックツリー',
+      processCount: 2,
+      pages: 132,
+      totalPages: 132,
+      durationMinutes: 28,
+      detail: 'ツリー作成',
+      operator: 'user01',
+      note: 'HT-STD-009.pdf;QA-REC-014.pdf',
+    },
+    {
+      site: '東京工場',
+      ipAddress: '192.168.3.10',
+      at: '2026-08-11T13:18:00',
+      actionType: 'タスク完了',
+      feature: '条項比較',
+      processCount: 2,
+      pages: 118,
+      totalPages: 118,
+      durationMinutes: 31,
+      detail: '差分抽出',
+      operator: 'user06',
+      note: 'ASTM-B117_2021.pdf;ASTM-B117_2024.pdf',
+    },
+    {
+      site: '東京工場',
+      ipAddress: '192.168.3.10',
+      at: '2026-08-10T17:02:00',
+      actionType: 'タスク失敗',
+      feature: 'スペックツリー',
+      processCount: 1,
+      pages: 0,
+      totalPages: 64,
+      durationMinutes: 4,
+      detail: 'ツリー作成',
+      operator: 'user07',
+      note: 'NADCAP-AC7102.pdf',
+    },
     {
       site: '桶川工場',
       ipAddress: '192.168.1.10',
@@ -332,7 +459,7 @@ function seedHistorySessions() {
               ...createSpecTreeResult(job)
             }
           : null,
-        progress: { running: false, stage: job.status },
+        progress: { running: job.status === 'running', stage: job.status, progress: job.progress || 0 },
         createdAt: Date.parse(job.createdAt),
       });
     }
@@ -346,7 +473,7 @@ function seedHistorySessions() {
         newFile: { fileId: 'file-new', fileName: newName.trim(), fileType: 'new' },
         run: { status: job.status, jobId: job.id },
         result: job.status === 'completed' ? createClauseCompareResult(job) : null,
-        progress: { running: job.status === 'running', stage: job.status },
+        progress: { running: job.status === 'running', stage: job.status, progress: job.progress || 0 },
         createdAt: Date.parse(job.createdAt),
       });
     }
@@ -639,6 +766,7 @@ function completeRunningTask(session) {
 
 export function refreshSessionRun(session) {
   if (!session?.run || session.run.status !== 'running') return session;
+  if (!store.runningTasks.some((task) => task.jobId === session.run.jobId)) return session;
   const type = session.run.type;
   if (!type) return session;
 

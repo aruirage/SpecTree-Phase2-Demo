@@ -23,6 +23,7 @@ export function useJobProgress({
   let tickTimer = null;
   let runToken = 0;
   let polling = false;
+  let startedAt = 0;
 
   function updateProgressSummary() {
     if (pageTotalState > 0) {
@@ -101,6 +102,7 @@ export function useJobProgress({
   function start(sessionId) {
     stop();
     const token = ++runToken;
+    startedAt = Date.now();
     progress.value = 2;
     target = 2;
     cap = 8;
@@ -116,7 +118,11 @@ export function useJobProgress({
     setTimeout(() => poll(sessionId, token), 500);
   }
 
-  function complete() {
+  async function complete({ minVisibleMs = 900 } = {}) {
+    const remainingMs = Math.max(0, Number(minVisibleMs) - (Date.now() - startedAt));
+    if (remainingMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, remainingMs));
+    }
     clearTimers();
     progress.value = 100;
     target = 100;

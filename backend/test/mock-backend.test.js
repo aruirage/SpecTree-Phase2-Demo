@@ -153,6 +153,36 @@ test('prompt setup is not exposed in phase 2 demo logs or API', async (t) => {
   );
 });
 
+test('system status exposes local factory', async (t) => {
+  const baseUrl = await startBackend(t);
+
+  const factory = await readJson(await fetch(`${baseUrl}/api/system/factory`));
+  assert.equal(factory.factory, '安来工場');
+  assert.equal(factory.isRecognized, true);
+});
+
+test('initial mock jobs cover both features and task statuses', async (t) => {
+  const baseUrl = await startBackend(t);
+
+  const specActive = await readJson(await fetch(`${baseUrl}/api/jobs?type=spec_tree&scope=active`));
+  const specHistory = await readJson(await fetch(`${baseUrl}/api/jobs?type=spec_tree&scope=history`));
+  const compareActive = await readJson(await fetch(`${baseUrl}/api/jobs?type=clause_compare&scope=active`));
+  const compareHistory = await readJson(await fetch(`${baseUrl}/api/jobs?type=clause_compare&scope=history`));
+
+  const allJobs = [
+    ...specActive.jobs,
+    ...specHistory.jobs,
+    ...compareActive.jobs,
+    ...compareHistory.jobs,
+  ];
+  assert.equal(specHistory.jobs.some((job) => job.status === 'completed'), true);
+  assert.equal(compareHistory.jobs.some((job) => job.status === 'completed'), true);
+  assert.equal(allJobs.some((job) => job.status === 'running'), true);
+  assert.equal(allJobs.some((job) => job.status === 'queued'), true);
+  assert.equal(allJobs.some((job) => job.status === 'failed'), true);
+  assert.equal(allJobs.some((job) => job.status === 'cancelled'), true);
+});
+
 test('spec tree upload does not block batches over the recommended total size', async (t) => {
   const baseUrl = await startBackend(t);
 
