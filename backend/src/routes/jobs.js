@@ -67,8 +67,7 @@ function enrichJob(job, context, queuePositions) {
 
 function filterJobs({ type, scope, context }) {
   let jobs = store.jobs
-    .filter((j) => j.type === type)
-    .filter((j) => !j.ipAddress || normalizeClientIP(j.ipAddress) === context.ipAddress);
+    .filter((j) => j.type === type);
   if (scope === 'active') {
     jobs = jobs.filter((j) => ACTIVE_STATUSES.has(j.status));
   } else if (scope === 'history') {

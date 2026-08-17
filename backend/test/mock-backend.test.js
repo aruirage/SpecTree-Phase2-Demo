@@ -183,6 +183,43 @@ test('initial mock jobs cover both features and task statuses', async (t) => {
   assert.equal(allJobs.some((job) => job.status === 'cancelled'), true);
 });
 
+test('task management is global and not filtered by client IP', async (t) => {
+  const baseUrl = await startBackend(t);
+
+  const uploadForm = new FormData();
+  uploadForm.append('files', createPdfFile('GLOBAL-MOCK.pdf'));
+  const upload = await readJson(await fetch(`${baseUrl}/api/spec-tree/upload`, {
+    method: 'POST',
+    headers: { 'x-forwarded-for': '198.51.100.20' },
+    body: uploadForm,
+  }));
+  await readJson(await fetch(`${baseUrl}/api/spec-tree/generate/start`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-forwarded-for': '198.51.100.20',
+    },
+    body: JSON.stringify({
+      sessionId: upload.sessionId,
+      rootFileIds: [upload.files[0].id],
+    }),
+  }));
+
+  const history = await readJson(await fetch(`${baseUrl}/api/jobs?type=spec_tree&scope=history`, {
+    headers: { 'x-forwarded-for': '203.0.113.10' },
+  }));
+  const specActive = await readJson(await fetch(`${baseUrl}/api/jobs?type=spec_tree&scope=active`, {
+    headers: { 'x-forwarded-for': '203.0.113.11' },
+  }));
+  const compareActive = await readJson(await fetch(`${baseUrl}/api/jobs?type=clause_compare&scope=active`, {
+    headers: { 'x-forwarded-for': '203.0.113.11' },
+  }));
+
+  assert.equal(history.jobs.some((job) => job.id === 'job-history-spec-001'), true);
+  assert.equal(specActive.jobs.some((job) => job.title === 'GLOBAL-MOCK スペックツリー'), true);
+  assert.equal(compareActive.jobs.some((job) => job.id === 'job-active-compare-running-001'), true);
+});
+
 test('spec tree upload does not block batches over the recommended total size', async (t) => {
   const baseUrl = await startBackend(t);
 
