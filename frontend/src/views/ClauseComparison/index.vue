@@ -4,6 +4,7 @@ import { ElMessage } from 'element-plus';
 import { useJobProgress } from '@/composables/useJobProgress';
 import { fetchJobsByType, cancelJob, rerunJob, loadClauseCompareResult } from '@/api/jobs';
 import { closeResultTab, upsertResultTab } from '@/utils/resultTabs';
+import PromptTemplates from '@/views/PromptTemplates/index.vue';
 
 defineOptions({ name: 'ClauseComparison' });
 
@@ -54,6 +55,12 @@ const taskJobs = ref([]);
 const selectedTaskIds = ref([]);
 const activeTaskJobId = ref('');
 const resultFullscreen = ref(false);
+const promptTemplates = ref([]);
+const selectedPromptTemplateId = ref('');
+const selectedPromptTemplate = computed(() => {
+  const template = promptTemplates.value.find((item) => item.id === selectedPromptTemplateId.value);
+  return template ? { templateId: template.id, templateName: template.name, templateVersion: template.version } : null;
+});
 
 const contentAreaRef = ref(null);
 const rightPanelRef = ref(null);
@@ -367,6 +374,7 @@ async function handleRun() {
         oldFileId: oldFile.value.fileId,
         newFileId: newFile.value.fileId,
         clientRunId: runId,
+        selectedTemplate: selectedPromptTemplate.value,
       }),
     });
     if (requestSeq !== runRequestSeq) return;
@@ -759,6 +767,10 @@ function statusClass(clause) {
   return '';
 }
 
+function needsReview(clause) {
+  return clause?.reviewRequired === true || clause?.review_required === true;
+}
+
 function contentSegments(clause, side) {
   const text = side === 'old' ? clause.oldContent : clause.newContent;
   if (!text) return [];
@@ -1118,7 +1130,22 @@ function resetClauseCompareSessionState({ errorMessage = '' } = {}) {
   clearClauseCompareRecovery();
 }
 
+async function loadPromptTemplates() {
+  try {
+    const response = await fetch('/api/prompt-templates', { cache: 'no-store' });
+    if (!response.ok) return;
+    const data = await response.json();
+    promptTemplates.value = data.templates || [];
+    if (!promptTemplates.value.some((item) => item.id === selectedPromptTemplateId.value)) {
+      selectedPromptTemplateId.value = promptTemplates.value[0]?.id || '';
+    }
+  } catch (loadError) {
+    console.warn('Failed to load prompt templates', loadError);
+  }
+}
+
 onMounted(() => {
+  loadPromptTemplates();
   restoreClauseCompareRecovery();
   loadTaskJobs();
   taskRefreshTimer = window.setInterval(loadTaskJobs, 3000);
@@ -1154,6 +1181,14 @@ onBeforeUnmount(() => {
         タスク管理
         <span v-if="taskJobs.length" class="tab-count">{{ taskJobs.length }}</span>
       </button>
+      <button
+        type="button"
+        class="clause-tabbar-btn"
+        :class="{ active: activeClauseTab === 'prompt' }"
+        @click="activeClauseTab = 'prompt'"
+      >
+        Prompt設定
+      </button>
     </div>
 
     <div v-if="activeClauseTab === 'compare'" class="clause-workspace">
@@ -1166,6 +1201,13 @@ onBeforeUnmount(() => {
 
       <div class="panel-body">
         <div class="panel-config">
+
+        <div class="section prompt-template-section">
+          <label class="section-label">抽出Prompt</label>
+          <select v-model="selectedPromptTemplateId" class="prompt-template-select">
+            <option v-for="template in promptTemplates" :key="template.id" :value="template.id">{{ template.name }}</option>
+          </select>
+        </div>
 
         <!-- Old file upload -->
         <div class="section">
@@ -1288,8 +1330,8 @@ onBeforeUnmount(() => {
           <span>{{ error }}</span>
         </div>
 
-        <!-- Legend -->
-        <div v-if="result" class="legend">
+        <!-- Legend hidden during extraction-only preview -->
+        <div v-if="false" class="legend">
           <p class="legend-title">凡例</p>
           <div v-if="detailedChangeTypesEnabled" class="legend-item">
             <span class="henko-mark status-added legend-mark">追加</span>
@@ -1639,7 +1681,6 @@ onBeforeUnmount(() => {
                   <span v-else class="cell-empty">—</span>
                 </td>
 
-                <!-- 変更状態 -->
                 <td class="cell-henko">
                   <span
                     v-if="isChanged(clause)"
@@ -1649,7 +1690,9 @@ onBeforeUnmount(() => {
                     {{ normalizeChangeStatus(clause) }}
                   </span>
                   <span v-else class="henko-none">{{ UNCHANGED_STATUS_LABEL }}</span>
+                  <span v-if="needsReview(clause)" class="review-mark">要確認</span>
                 </td>
+
               </tr>
             </tbody>
           </table>
@@ -1659,7 +1702,7 @@ onBeforeUnmount(() => {
     </div>
     </div>
 
-    <section v-else class="task-management-page">
+    <section v-else-if="activeClauseTab === 'tasks'" class="task-management-page">
       <div class="task-toolbar">
         <div class="task-status-tabs">
           <button
@@ -1812,6 +1855,10 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
+    <section v-else class="prompt-settings-tab">
+      <PromptTemplates />
+    </section>
+
     <!-- ── Lightbox ────────────────────────────────────────────────────── -->
     <Teleport :to="lightboxTeleportTarget">
       <div v-if="lightbox" class="lightbox-overlay" @click.self="lightbox = null">
@@ -1878,6 +1925,16 @@ onBeforeUnmount(() => {
   font-size: var(--font-size-base);
   font-family: "Noto Sans JP", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   background: #f5f7fa;
+}
+
+.prompt-settings-tab {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.prompt-settings-tab :deep(.prompt-page) {
+  min-height: 100%;
 }
 
 .clause-tabbar {
@@ -2184,6 +2241,9 @@ onBeforeUnmount(() => {
   background: #fff;
   overflow: hidden;
 }
+
+.prompt-template-section { margin-bottom: 18px; }
+.prompt-template-select { width: 100%; height: 38px; padding: 0 10px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; color: #334155; font: inherit; }
 
 .panel-header {
   display: flex;
@@ -2757,6 +2817,19 @@ tr:hover td { filter: brightness(0.97); }
 .henko-none {
   font-size: 13px;
   color: #cbd5e1;
+}
+
+.review-mark {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 5px;
+  border: 1px solid #f59e0b;
+  border-radius: 3px;
+  background: #fffbeb;
+  color: #b45309;
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 
 .status-added {

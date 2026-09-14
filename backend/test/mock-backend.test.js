@@ -485,10 +485,16 @@ test('spec tree upload preserves Japanese filenames and exports Excel layout', a
     }),
   }));
 
-  await pollJson(
+  const result = await pollJson(
     `${baseUrl}/api/spec-tree/result?sessionId=${encodeURIComponent(start.jobs[0].sessionId)}`,
     (data) => Boolean(data.mmdContent),
   );
+  const supplementNode = result.treeNodes.find((node) => node.changeType === '補完');
+  const deletedNode = result.treeNodes.find((node) => node.changeType === '削除');
+  assert.ok(supplementNode, 'spec tree result should include supplement nodes');
+  assert.ok(deletedNode, 'spec tree result should include deleted nodes');
+  assert.match(result.mmdContent, /class .* supplementNode/);
+  assert.match(result.mmdContent, /class .* deletedNode/);
 
   const exportRes = await fetch(`${baseUrl}/api/spec-tree/export?format=excel&sessionId=${encodeURIComponent(start.jobs[0].sessionId)}`);
   assert.equal(exportRes.status, 200);
@@ -507,6 +513,11 @@ test('spec tree upload preserves Japanese filenames and exports Excel layout', a
   assert.equal(sheet.getCell('B1').value, '階層');
   assert.equal(sheet.getCell('C1').value, 'スペック名称');
   assert.equal(sheet.getCell('D1').value, '改訂記号');
+  assert.equal(sheet.getCell('E1').value, '区分');
   assert.equal(sheet.getRow(2).getCell(1).font.name, 'Noto Sans JP');
   assert.equal(sheet.getRow(4).getCell(1).alignment.indent, 2);
+  assert.equal(sheet.getRow(5).getCell(5).value, '削除');
+  assert.equal(sheet.getRow(6).getCell(5).value, '削除');
+  assert.equal(sheet.getRow(12).getCell(5).value, '補完');
+  assert.equal(sheet.getRow(13).getCell(5).value, '補完');
 });

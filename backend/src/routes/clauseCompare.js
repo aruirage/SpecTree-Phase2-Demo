@@ -477,7 +477,6 @@ function beginRun(session, clientRunId, factory, ipAddress, templateOptions = {}
   session.oldTemplate = normalizeExtractionTemplate(templateOptions.oldTemplate || selectedTemplate);
   session.newTemplate = normalizeExtractionTemplate(templateOptions.newTemplate || selectedTemplate);
   session.selectedTemplate = selectedTemplate;
-  
   // キャッシュをチェック
   const cached = getCachedResult('clause_compare', files, {
     templateId: selectedTemplate.templateId,
@@ -534,7 +533,7 @@ function beginRun(session, clientRunId, factory, ipAddress, templateOptions = {}
     template: selectedTemplate,
   });
   const runId = clientRunId || nextId('run');
-  
+
   session.factory = factory || '安来工場';
   session.ipAddress = ipAddress;
   

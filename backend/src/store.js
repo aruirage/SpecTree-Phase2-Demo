@@ -53,6 +53,7 @@ export const store = {
     uploadedAt: '2026-05-17T00:00:00.000Z',
   },
   prompts: createInitialPrompts(),
+  promptTemplateConfigs: createInitialPromptTemplateConfigs(),
   extractionTemplates: {
     ams: { templateId: 'ams', templateName: 'AMS テンプレート', templateVersion: 'v1.0' },
     astm: { templateId: 'astm', templateName: 'ASTM テンプレート', templateVersion: 'v1.0' },
@@ -310,6 +311,51 @@ export const store = {
   ],
 };
 
+export function createInitialPromptTemplateConfigs() {
+  const now = new Date().toISOString();
+  const base = {
+    promptText: 'Business extraction rules:\n- Exclude non-clause content such as tables of contents, prefaces, references, disclaimers, copyright notices, order information, contact information, licenses, watermarks, and document-distribution notices.\n- Preserve the original wording, terminology, numbers, punctuation, and meaning. Do not correct grammar, paraphrase, summarize, or add information that is not present in the document.\n- Keep every explicitly stated clause number in the original order. Start each clause on a new line. Merge only unnumbered continuation text that clearly belongs to the preceding clause.\n- Keep a clause heading, clause number, and clause body on separate lines when they appear as separate lines in the source. Do not merge them into one line.\n- Keep every paragraph on a separate line. Keep every numbered or bulleted list item on a separate line, including items beginning with 1), 2), (1), (2), -, ・, or •.\n- Treat parenthesized lists such as (1), (2), and (3) as part of the current clause, but preserve each list item on its own line.\n- If Japanese, English, or another language appears in separate source lines, preserve the language boundaries and keep those lines separate.\n- Preserve intentional line breaks in headings, paragraphs, and lists. Join only line breaks that are clearly caused by PDF layout within the same sentence.\n- Remove repeated headers, footers, and boilerplate even when they appear in the middle of a clause.\n- Treat numbered lists and bulleted lists as text. Classify content as a table or image only when its layout clearly has a table or image structure.\n- Do not infer, complete, reorder, or invent missing clause numbers, specifications, versions, prefixes, or suffixes.',
+    specTreePromptText: 'PDF から仕様ツリーのノードと参照関係を抽出してください。\n\n業務ルール：\n- 仕様書名、仕様番号、ノード名、改訂記号、参照関係を原文どおりに保持する。\n- 本文、一覧、表、図面内の仕様書参照を確認し、親子関係を構成する。\n- すべての階層を抽出し、削除または補完されたノードの子ノードも同じ変更状態として扱う。\n- 入力に存在しない仕様番号、ファイル名、ノードを番号順から推測して追加しない。\n- 不明な参照は原文のまま保持し、黙って削除しない。',
+    promptSections: {
+      clause_compare: {
+        extraction: 'タイトル、本文、条項番号、箇条書き、番号付きリスト、子条項を抽出し、原文と原番号を保持する。',
+        structure: '条項番号から次の同階層番号の直前までを同一条項とし、番号のない続きのブロックを直前の条項に統合する。',
+        textLayout: 'タイトルと本文、異なる言語の文章を改行して保持する。通常のリストや整列した文章はテキストとして抽出する。',
+        mediaExceptions: '明確な行列構造を持つ表や図だけを画像として抽出し、端部の文字、脚注、注記を含める。ヘッダー、フッター、透かし、印章、注釈は除外し、項目番号を推測しない。',
+      },
+      spec_tree: {
+        extraction: '仕様書名、仕様番号、ノード名、改訂記号、参照関係を原文どおりに抽出する。',
+        structure: '原文の参照関係から親子階層を構成し、すべての階層を抽出する。削除または補完されたノードの子ノードも同じ変更状態として扱う。',
+        textLayout: 'ノード名、仕様番号、ファイル名、必要な原文の改行を保持し、一覧や本文を漏れなく抽出する。',
+        mediaExceptions: '表や図を途中で切断せず、端部の文字や脚注を含めて抽出する。入力にないノード、番号、ファイル名を生成しない。',
+      },
+    },
+    exclusionRules: 'ヘッダー、フッター、著作権、透かし、印章、注釈は抽出しない。',
+    crossPageRules: 'ヘッダーとフッターを除外したうえで、ページをまたぐ条項を継続して統合する。',
+    newlinePolicy: '段落、リスト項目、番号付き項目、サブタイトルの前で改行する。',
+    mergePolicy: 'PDF の行中にある意図しない改行だけを結合し、段落間の改行は保持する。',
+    languageSeparation: '同一条項内の日本語と英語は改行して分ける。',
+    includeCaption: true,
+    captionToText: false,
+    updatedAt: now,
+    published: false,
+  };
+  const seriesPrompts = {
+    default: base.promptText,
+    ams: `${base.promptText}\n- For AMS documents, preserve the standard designation, slash suffix, revision letter, and table or figure references exactly as shown.`,
+    astm: `${base.promptText}\n- For ASTM documents, preserve designations such as ASTM A370 and ASTM E8/E8M exactly, including letters, numbers, slashes, and revision suffixes.`,
+    isajt: `${base.promptText}\n- For ISAJT documents, preserve Japanese and English lines separately, keep definition subitems under the current clause, and do not merge reference lists into one line.`,
+    dmf: `${base.promptText}\n- For DMF documents, keep document numbers, revision marks, boxed text, and numbered requirements in their visible reading order without inferring missing items.`,
+  };
+  return [
+    { id: 'default', series: ['その他'], name: 'その他（汎用）', isDefault: true, ...base, promptText: seriesPrompts.default },
+    { id: 'ams', series: ['AMS'], name: 'AMS 標準抽出', isDefault: true, ...base, promptText: seriesPrompts.ams },
+    { id: 'astm', series: ['ASTM'], name: 'ASTM 標準抽出', isDefault: true, ...base, promptText: seriesPrompts.astm },
+    { id: 'isajt', series: ['ISAJT'], name: 'ISAJT 標準抽出', isDefault: true, ...base, promptText: seriesPrompts.isajt },
+    { id: 'dmf', series: ['DMF'], name: 'DMF 標準抽出', isDefault: true, ...base, promptText: seriesPrompts.dmf },
+  ];
+}
+
 function promptKeyForJobType(type) {
   return type === 'spec_tree' ? 'spec_tree.pipeline' : 'clause_compare.extract';
 }
@@ -318,7 +364,7 @@ export function normalizeExtractionTemplate(template = {}) {
   const templateId = template.templateId || template.id || 'default';
   const fallback = store.extractionTemplates[templateId] || store.extractionTemplates.default;
   return {
-    templateId: fallback.templateId,
+    templateId,
     templateName: template.templateName || template.name || fallback.templateName,
     templateVersion: template.templateVersion || template.version || fallback.templateVersion,
   };
@@ -336,7 +382,7 @@ const SPEC_TREE_VARIANTS = [
     rootLabel: 'M000378 Rev:C\\nSHAFT, LPT CONE',
     nodes: [
       { id: 'n1', label: 'ISAJT-P3TF2\\nFluorescent Penetrant Inspection', level: 1 },
-      { id: 'n2', label: 'ISAJT-P4TF2\\nEtching of Superalloys', level: 1 },
+      { id: 'n2', label: 'ISAJT-P4TF2\\nEtching of Superalloys', level: 1, changeType: '補完' },
       { id: 'n3', label: 'AMS 5596\\nNickel Alloy Sheet', level: 2 },
       { id: 'n4', label: 'P2TF1\\nRegulated Materials', level: 2 },
     ],
@@ -345,10 +391,10 @@ const SPEC_TREE_VARIANTS = [
     rootNo: 'M000412',
     rootLabel: 'M000412 Rev:A\\nHEAT TREAT CONTROL',
     nodes: [
-      { id: 'n1', label: 'AMS2750F\\nPyrometry', level: 1 },
+      { id: 'n1', label: 'AMS2750F\\nPyrometry', level: 1, changeType: '補完' },
       { id: 'n2', label: 'ASTM E220\\nThermocouple Calibration', level: 2 },
       { id: 'n3', label: 'SAE ARP1962\\nTemperature Sensors', level: 2 },
-      { id: 'n4', label: 'NADCAP AC7102\\nHeat Treat Audit Criteria', level: 1 },
+      { id: 'n4', label: 'NADCAP AC7102\\nHeat Treat Audit Criteria', level: 1, changeType: '削除' },
       { id: 'n5', label: 'HT-STD-009\\nBatch Records', level: 2 },
     ],
   },
@@ -356,11 +402,11 @@ const SPEC_TREE_VARIANTS = [
     rootNo: 'M000501',
     rootLabel: 'M000501 Rev:B\\nSURFACE TREATMENT',
     nodes: [
-      { id: 'n1', label: 'MIL-C-5541\\nChromate Coating', level: 1 },
+      { id: 'n1', label: 'MIL-C-5541\\nChromate Coating', level: 1, changeType: '削除' },
       { id: 'n2', label: 'MIL-C-13924\\nBlack Oxide Coating', level: 1 },
       { id: 'n3', label: 'ASTM B117\\nSalt Spray Test', level: 2 },
       { id: 'n4', label: 'ISO 9227\\nCorrosion Tests', level: 2 },
-      { id: 'n5', label: 'P4TF8\\nSwab Etching', level: 1 },
+      { id: 'n5', label: 'P4TF8\\nSwab Etching', level: 1, changeType: '補完' },
       { id: 'n6', label: 'QA-REC-014\\nInspection Records', level: 2 },
     ],
   },
@@ -608,22 +654,39 @@ const CLAUSE_STAGES = [
 export function createSpecTreeResult(context = {}) {
   const seed = `${context.sessionId || ''}:${context.title || ''}:${context.rootFileId || ''}`;
   const variant = SPEC_TREE_VARIANTS[variantIndex(seed, SPEC_TREE_VARIANTS.length)];
+  const annotatedNodes = [];
+  const inheritedChangeTypes = [];
+  for (const node of variant.nodes) {
+    const level = Math.max(0, Number(node.level) || 0);
+    inheritedChangeTypes.length = level;
+    const inheritedChangeType = inheritedChangeTypes[level - 1] || '';
+    const changeType = node.changeType || inheritedChangeType || '';
+    inheritedChangeTypes[level] = changeType;
+    annotatedNodes.push({ ...node, changeType });
+  }
   const nodes = [
-    { id: 'root', label: variant.rootLabel.replace('\\n', ' '), level: 0 },
-    ...variant.nodes,
+    { id: 'root', label: variant.rootLabel.replace('\\n', ' '), level: 0, changeType: '' },
+    ...annotatedNodes,
   ];
   const lines = [
     'flowchart LR',
     `  root["${variant.rootLabel}"]`,
-    ...variant.nodes.map((node) => `  ${node.id}["${node.label}"]`),
+    ...annotatedNodes.map((node) => `  ${node.id}["${node.label}"]`),
+    '  classDef supplementNode fill:#EAF7EF,stroke:#15803D,stroke-width:2px,color:#14532D',
+    '  classDef deletedNode fill:#F1F5F9,stroke:#94A3B8,stroke-width:2px,color:#64748B,stroke-dasharray: 4 3',
   ];
   let parentId = 'root';
-  for (const node of variant.nodes) {
+  for (const node of annotatedNodes) {
     if (node.level <= 1) {
       lines.push(`  root --> ${node.id}`);
       parentId = node.id;
     } else {
       lines.push(`  ${parentId} --> ${node.id}`);
+    }
+    if (node.changeType === '補完') {
+      lines.push(`  class ${node.id} supplementNode`);
+    } else if (node.changeType === '削除') {
+      lines.push(`  class ${node.id} deletedNode`);
     }
   }
   return {

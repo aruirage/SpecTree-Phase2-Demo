@@ -6,6 +6,7 @@ import licenseRouter from './routes/license.js';
 import logsRouter from './routes/logs.js';
 import specTreeRouter from './routes/specTree.js';
 import systemRouter from './routes/system.js';
+import promptTemplatesRouter from './routes/promptTemplates.js';
 
 const app = express();
 
@@ -26,6 +27,7 @@ app.use('/api/jobs', jobsRouter);
 app.use('/api/license', licenseRouter);
 app.use('/api/logs', logsRouter);
 app.use('/api/system', systemRouter);
+app.use('/api/prompt-templates', promptTemplatesRouter);
 
 app.use((err, _req, res, _next) => {
   console.error(err);

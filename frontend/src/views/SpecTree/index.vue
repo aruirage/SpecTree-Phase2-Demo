@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useJobProgress } from '@/composables/useJobProgress';
 import { fetchJobsByType, cancelJob, rerunJob, loadSpecTreeResult } from '@/api/jobs';
+import { fetchPromptTemplates, resetPromptTemplate, updatePromptTemplate } from '@/api/promptTemplates';
 import { closeResultTab, upsertResultTab } from '@/utils/resultTabs';
 
 defineOptions({ name: 'SpecTree' });
@@ -40,6 +41,10 @@ const taskJobs = ref([]);
 const selectedTaskIds = ref([]);
 const activeSpecTreeTab = ref('generate');
 const activeTaskStatusTab = ref('all');
+const specTreePromptDialogOpen = ref(false);
+const specTreePromptSaving = ref(false);
+const specTreePromptText = ref('');
+const specTreePromptTemplateId = ref('default');
 const SPEC_TREE_LABEL_WRAP_LIMIT = {
   LR: 34,
   TD: 26,
@@ -106,6 +111,45 @@ const {
   stages: SPEC_TREE_PROGRESS_STAGES,
   fallbackLabel: '処理中...',
 });
+
+async function loadSpecTreePrompt() {
+  try {
+    const data = await fetchPromptTemplates();
+    const template = data.templates?.find((item) => item.id === 'default') || data.templates?.[0];
+    if (template) {
+      specTreePromptTemplateId.value = template.id;
+      specTreePromptText.value = template.specTreePromptText || '';
+    }
+  } catch (promptError) {
+    console.warn('spec tree prompt load failed', promptError);
+  }
+}
+
+async function saveSpecTreePrompt() {
+  specTreePromptSaving.value = true;
+  try {
+    const data = await updatePromptTemplate(specTreePromptTemplateId.value, {
+      specTreePromptText: specTreePromptText.value,
+    });
+    specTreePromptText.value = data.template?.specTreePromptText || specTreePromptText.value;
+    specTreePromptDialogOpen.value = false;
+    ElMessage.success('抽出ルールを保存しました');
+  } catch (promptError) {
+    ElMessage.error(promptError.message || '抽出ルールの保存に失敗しました');
+  } finally {
+    specTreePromptSaving.value = false;
+  }
+}
+
+async function resetSpecTreePrompt() {
+  try {
+    const data = await resetPromptTemplate(specTreePromptTemplateId.value);
+    specTreePromptText.value = data.template?.specTreePromptText || '';
+    ElMessage.success('標準設定に戻しました');
+  } catch (promptError) {
+    ElMessage.error(promptError.message || '標準設定の復元に失敗しました');
+  }
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 function formatBytes(bytes) {
@@ -1311,6 +1355,7 @@ function createClientRunId() {
 
 onMounted(() => {
   loadTaskJobs();
+  loadSpecTreePrompt();
   loadExcelConfig();
   restoreSpecTreeRecovery();
   taskRefreshTimer = window.setInterval(loadTaskJobs, 3000);
@@ -1353,6 +1398,7 @@ watch(rootFileIds, () => {
     <aside class="left-panel">
       <div class="panel-header">
         <span class="panel-header-title">スペックツリー</span>
+        <button type="button" class="btn btn-outline btn-sm prompt-edit-button" @click="specTreePromptDialogOpen = true">Prompt編集</button>
       </div>
 
       <div class="panel-body">
@@ -1900,7 +1946,16 @@ watch(rootFileIds, () => {
           </div>
         </article>
       </div>
-    </section>
+      </section>
+
+    <el-dialog v-model="specTreePromptDialogOpen" title="スペックツリー抽出ルール" width="720px" class="spec-tree-prompt-dialog">
+      <el-input v-model="specTreePromptText" type="textarea" :rows="16" resize="vertical" placeholder="抽出ルールを入力してください" />
+      <template #footer>
+        <el-button @click="resetSpecTreePrompt">標準に戻す</el-button>
+        <el-button @click="specTreePromptDialogOpen = false">キャンセル</el-button>
+        <el-button type="primary" :loading="specTreePromptSaving" @click="saveSpecTreePrompt">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -2001,6 +2056,16 @@ watch(rootFileIds, () => {
   font-size: var(--font-size-title);
   font-weight: 700;
   color: #1e293b;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.prompt-edit-button {
+  flex: 0 0 auto;
 }
 
 .panel-body {

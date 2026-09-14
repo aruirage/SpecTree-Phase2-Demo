@@ -28,6 +28,12 @@ const routes = [
         name: 'SystemLogs',
         component: () => import('../views/SystemLogs/index.vue'),
         meta: { title: '利用状況管理' }
+      },
+      {
+        path: 'prompt-templates',
+        name: 'PromptTemplates',
+        component: () => import('../views/PromptTemplates/index.vue'),
+        meta: { title: 'プロンプト設定' }
       }
     ]
   },

@@ -35,21 +35,33 @@ const EXPORT_FONT_NAME = 'Noto Sans JP';
 const SPEC_TREE_EXPORT_ROWS = [
   { specNo: 'M000378', level: 0, specName: 'SHAFT, LPT CONE', revision: 'C' },
   { specNo: 'ISAJT-P3TF2', level: 1, specName: 'FLUORESCENT PENETRANT INSPECTION (FPI)', revision: 'S29' },
-  { specNo: 'MIL-C-5541', level: 2, specName: 'Chromate Coating', revision: '' },
-  { specNo: 'MIL-C-13924', level: 2, specName: 'Black Oxide Coating', revision: '' },
-  { specNo: 'MIL-STD-792', level: 2, specName: 'Identification Marking Requirements for Special Purpose Components', revision: '' },
+  { specNo: 'MIL-C-5541', level: 2, specName: 'Chromate Coating', revision: '', changeType: '削除' },
+  { specNo: 'MIL-C-13924', level: 3, specName: 'Black Oxide Coating', revision: '' },
+  { specNo: 'MIL-STD-792', level: 3, specName: 'Identification Marking Requirements for Special Purpose Components', revision: '' },
   { specNo: '8311253', level: 2, specName: 'Fluorescent Penetrant Inspection (FPI) Standards', revision: '' },
   { specNo: 'D50TF8', level: 2, specName: 'Temporary Marking Materials for Engine Components', revision: '' },
   { specNo: 'P2TF1', level: 2, specName: 'Regulated Materials', revision: '' },
   { specNo: 'P3TF41', level: 2, specName: 'Control of Nondestructive Inspection Standards', revision: '' },
   { specNo: 'P3TF45', level: 2, specName: 'Types of Records to be Retained for NDE (Nondestructive Evaluation)', revision: '' },
-  { specNo: 'ISAJT-P4TF2', level: 2, specName: 'Etching of Superalloys', revision: 'S15' },
+  { specNo: 'ISAJT-P4TF2', level: 2, specName: 'Etching of Superalloys', revision: 'S15', changeType: '補完' },
   { specNo: 'AMS 5596', level: 3, specName: 'Nickel Alloy, Corrosion and Heat Resistant, Sheet, Strip, and Plate', revision: '' },
   { specNo: 'ARP 1755', level: 3, specName: 'Effect of Cleaning Methods on Aircraft Engine Materials, Stock Loss Test Method', revision: '' },
   { specNo: 'P2TF1', level: 3, specName: 'Regulated Materials', revision: '' },
   { specNo: 'P4TF3', level: 2, specName: 'Cleaning of Titanium', revision: '' },
   { specNo: 'ISAJT-P4TF8', level: 2, specName: 'Swab Etching', revision: 'S6' },
 ];
+
+function withInheritedChangeTypes(rows = []) {
+  const inheritedChangeTypes = [];
+  return rows.map((row) => {
+    const level = Math.max(0, Number(row.level) || 0);
+    inheritedChangeTypes.length = level + 1;
+    const inheritedChangeType = inheritedChangeTypes[level - 1] || '';
+    const changeType = row.changeType || inheritedChangeType || '';
+    inheritedChangeTypes[level] = changeType;
+    return { ...row, changeType };
+  });
+}
 
 function timestampForFileName(date = new Date()) {
   const pad = (value) => String(value).padStart(2, '0');
@@ -165,6 +177,7 @@ async function buildSpecTreeWorkbook() {
     { header: '階層', key: 'level', width: 10 },
     { header: 'スペック名称', key: 'specName', width: 86 },
     { header: '改訂記号', key: 'revision', width: 12 },
+    { header: '区分', key: 'changeType', width: 12 },
   ];
 
   sheet.getRow(1).height = 24;
@@ -175,14 +188,14 @@ async function buildSpecTreeWorkbook() {
     applyExportBorder(cell);
   });
 
-  SPEC_TREE_EXPORT_ROWS.forEach((rowData) => {
+  withInheritedChangeTypes(SPEC_TREE_EXPORT_ROWS).forEach((rowData) => {
     const row = sheet.addRow(rowData);
     row.height = 18;
     row.eachCell((cell, colNumber) => {
       cell.font = { name: EXPORT_FONT_NAME, size: 9, color: { argb: 'FF111827' } };
       cell.alignment = {
         vertical: 'middle',
-        horizontal: colNumber === 2 || colNumber === 4 ? 'center' : 'left',
+        horizontal: colNumber === 2 || colNumber === 4 || colNumber === 5 ? 'center' : 'left',
         wrapText: colNumber === 3,
         indent: colNumber === 1 ? Math.max(0, Number(rowData.level) || 0) : 0,
       };
@@ -506,8 +519,8 @@ router.get('/export', (req, res) => {
   }
 
   const rows = [
-    ['スペックNo', '階層', 'スペック名称', '改訂記号'],
-    ...SPEC_TREE_EXPORT_ROWS.map((row) => [row.specNo, row.level, row.specName, row.revision]),
+    ['スペックNo', '階層', 'スペック名称', '改訂記号', '区分'],
+    ...withInheritedChangeTypes(SPEC_TREE_EXPORT_ROWS).map((row) => [row.specNo, row.level, row.specName, row.revision, row.changeType || '']),
   ];
   const csv = `\ufeff${rows.map((row) => row.map(csvEscape).join(',')).join('\n')}`;
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');

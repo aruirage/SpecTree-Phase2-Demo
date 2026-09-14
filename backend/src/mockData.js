@@ -72,6 +72,7 @@ export const MOCK_CLAUSE_COMPARE = {
       newTranslation: '熱電対は、AMS2750Fに従い90日ごとに校正されなければならない。',
       newImages: [{ url: mockEvidenceImage('NEW 3.2', '#0076bf'), label: '新 画像1' }],
       status: '変更',
+      reviewRequired: true,
     },
     {
       id: 'c3',
@@ -96,6 +97,7 @@ export const MOCK_CLAUSE_COMPARE = {
       newTranslation: 'TUS記録は7年間保管し、デジタル署名を含めなければならない。',
       newImages: [{ url: mockEvidenceImage('NEW 5.4', '#0076bf'), label: '新 画像1' }],
       status: '変更',
+      reviewRequired: true,
     },
     {
       id: 'c5',
@@ -120,6 +122,7 @@ export const MOCK_CLAUSE_COMPARE = {
       newTranslation: 'クラス1炉における補助熱電対の配置は、図3-2に従わなければならない。',
       newImages: [{ url: mockEvidenceImage('NEW 7.1', '#14a88b'), label: '新 画像1' }],
       status: '追加',
+      reviewRequired: true,
     },
   ],
 };

@@ -109,7 +109,6 @@ function isActive(path) {
             <line x1="10" y1="12" x2="20" y2="12"/>
             <line x1="10" y1="18" x2="20" y2="18"/>
           </svg>
-
           <span v-if="!collapsed" class="nav-label">{{ item.label }}</span>
         </RouterLink>
       </nav>
@@ -369,10 +368,11 @@ function isActive(path) {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
 
   > * {
-    flex: 1;
+    flex: 0 0 auto;
     min-width: 0;
     min-height: 0;
   }
