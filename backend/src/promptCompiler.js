@@ -83,27 +83,27 @@ export const SWITCHES = [
 const REJECT_RULES = [
   {
     pattern: /(ignore|disregard|forget)\s+(all\s+)?(the\s+)?(previous|above|prior|earlier)\s+(instructions?|rules?|prompts?)/i,
-    reason: '固定層（システムプロンプト）の指示を上書きする要求です。固定層の「役割定義とハード制約は変更できない」と矛盾するため受理できません。',
+    reason: '固定層の指示を上書きする内容です。役割定義や出力制約は変更できないため、このルールは使えません。',
   },
   {
     pattern: /(これまで|上記|前述|以前)の(指示|命令|ルール|プロンプト)を?(無視|忘れ|破棄)/,
-    reason: '固定層（システムプロンプト）の指示を上書きする要求です。固定層の「役割定義とハード制約は変更できない」と矛盾するため受理できません。',
+    reason: '固定層の指示を上書きする内容です。役割定義や出力制約は変更できないため、このルールは使えません。',
   },
   {
     pattern: /(markdown|マークダウン|md)\s*(形式)?\s*(で)?\s*(出力|返|書)/i,
-    reason: '固定層のハード制約「有効な JSON のみを出力し、Markdown や説明文を追加しない」と矛盾します。出力形式はお客様側では変更できません。',
+    reason: '出力は JSON のみです。Markdown や説明文での出力は指定できません。',
   },
   {
     pattern: /(json\s*(以外|ではなく)|not\s+(in\s+)?json|プレーンテキストで出力)/i,
-    reason: '固定層のハード制約「有効な JSON のみを出力し、Markdown や説明文を追加しない」と矛盾します。JSON 以外の形式は受理できません。',
+    reason: '出力は JSON のみです。プレーンテキストなど、JSON 以外の形式は指定できません。',
   },
   {
     pattern: /you\s+are\s+(now\s+)?(a|an)\s+/i,
-    reason: '固定層の役割定義「あなたは PDF 構造化分析の専門家です」と矛盾します。モデルの役割は変更できません。',
+    reason: 'モデルの役割は固定です。別の役割へ変更する指示は使えません。',
   },
   {
     pattern: /(あなたは|これからは).*(として振る舞|になりき|役割)/,
-    reason: '固定層の役割定義「あなたは PDF 構造化分析の専門家です」と矛盾します。モデルの役割は変更できません。',
+    reason: 'モデルの役割は固定です。別の役割へ変更する指示は使えません。',
   },
 ];
 
@@ -117,7 +117,7 @@ const FABRICATION_PATTERNS = [
   /(推測して|補完して|補って|埋めて)[^。\n]*?(番号|条項|id)/,
 ];
 const FABRICATION_REASON =
-  '「条項番号」モジュールの「Never invent clause ids: use only clause numbers visibly printed in the document.」と矛盾します。原文に印字されていない番号を推測で補う指示は受理できません。';
+  '「条項番号」の規則に反します。原文に印字されていない条項番号を推測で付け足す指示は使えません。';
 
 export function validateRule(line) {
   for (const rule of REJECT_RULES) {

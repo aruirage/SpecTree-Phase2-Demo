@@ -122,9 +122,9 @@ test('each series template carries its own 【C】 rules, or states it has none'
     const lines = seriesRuleLines(templates[id].promptText);
     assert.equal(lines.length, RULE_COUNTS[id], `${id} の【C】ルール数`);
     if (RULE_COUNTS[id]) {
-      assert.match(templates[id].promptText, /【C】[^\n]*の追加ルール（この系列だけに適用）/);
+      assert.match(templates[id].promptText, /【C】[^\n]*のカスタムルール（この系列だけに適用）/);
     } else {
-      assert.match(templates[id].promptText, /【C】[^\n]*の追加ルールはまだありません。/);
+      assert.match(templates[id].promptText, /【C】[^\n]*のカスタムルールはまだありません。/);
     }
   }
   // ルールを持つ系列どうしは内容が重複しない（＝テンプレートが分かれている）
@@ -328,10 +328,10 @@ test('every template exposes the same module names in the same order', () => {
     'ページの扱い',
     '画像・テキストの境界',
     '条項番号',
-    '除外',
     'レイアウト',
     '翻訳',
-    '追加ルール',
+    '除外',
+    'カスタムルール',
   ]);
   for (const id of SERIES_IDS) {
     assert.deepEqual(
@@ -342,9 +342,9 @@ test('every template exposes the same module names in the same order', () => {
   }
   assert.deepEqual(
     shown(standard.specTreeModules).map((mod) => mod.name),
-    ['抽出の基本', '正規化', '除外', '追加ルール'],
+    ['抽出の基本', '正規化', '除外', 'カスタムルール'],
   );
-  // 1期共通テンプレートの追加ルールは空（中身だけがテンプレートごとに違う）。
+  // Ph1共通テンプレートのカスタムルールは空（中身だけがテンプレートごとに違う）。
   assert.deepEqual(standard.modules.find((mod) => mod.id === 'series_rules').rules, []);
   assert.equal(templates.isajt.modules.find((mod) => mod.id === 'series_rules').rules.length, 3);
 });
@@ -529,16 +529,12 @@ test('the demo data carries rules the check rejects, each with a reason naming t
   assert.equal(rejected.length, 2, 'デモ用の無効ルールは 2 件');
   for (const item of rejected) {
     assert.ok(item.verdict.reason, `理由がありません: ${item.text}`);
-    // 「何と矛盾するか」が読み取れること。
-    assert.match(item.verdict.reason, /矛盾します/);
-    assert.ok(
-      /モジュール|ハード制約|役割定義/.test(item.verdict.reason),
-      `衝突先が書かれていません: ${item.verdict.reason}`,
-    );
+    // なぜ使えないかが日本語で読めること。
+    assert.match(item.verdict.reason, /使えません|指定できません/);
   }
-  // 1件は編集可能なモジュールの規則と、もう1件は固定層の制約と衝突する。
-  assert.match(rejected[0].verdict.reason, /「条項番号」モジュール/);
-  assert.match(rejected[1].verdict.reason, /固定層のハード制約/);
+  // 1件は条項番号の規則、もう1件は出力形式の制約。
+  assert.match(rejected[0].verdict.reason, /条項番号/);
+  assert.match(rejected[1].verdict.reason, /JSON/);
   // 有効なルールはそのまま残る（デモ用に足しても既存の系列ルールは消えない）。
   assert.equal(amsSeries.rules.filter((rule) => validateRule(rule.text).ok).length, 2);
   // 無効なルールは出力（モデルへ渡す内容）には混ざらない。

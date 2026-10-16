@@ -70,7 +70,7 @@ export const store = {
     kq: { templateId: 'kq', templateName: 'KQ 標準抽出', templateVersion: 'v1.0' },
     rr: { templateId: 'rr', templateName: 'RR 標準抽出', templateVersion: 'v1.0' },
     mil: { templateId: 'mil', templateName: 'MIL 標準抽出', templateVersion: 'v1.0' },
-    default: { templateId: 'default', templateName: '1期共通テンプレート', templateVersion: 'v1.0' },
+    default: { templateId: 'default', templateName: 'Ph1共通テンプレート', templateVersion: 'v1.0' },
   },
   jobs: createInitialJobs(),
   /** @type {Map<string, object>} */
@@ -383,13 +383,13 @@ const CLAUSE_COMPARE_RULES = {
   // 現行 system prompt（src/prompts/clause_compare/gemini_page.json）が
   // "Do not translate keys" / "Keep the original language of the document text" と明記している。
   // 翻訳は二期の追加機能で、系列テンプレートが SERIES_DEFS[].translationRules で
-  // 自前の規則を持ったときだけ「翻訳」モジュールに中身が入る。1期共通テンプレートでは空。
+  // 自前の規則を持ったときだけ「翻訳」モジュールに中身が入る。Ph1共通テンプレートでは空。
 };
 
 /**
  * テンプレートを構成する「モジュール」。1 モジュール＝1 責務。
  *
- * 画面に出す業務ルールは、1期共通テンプレートでは 1 期原文を去重したもの（layer 'fixed'）、
+ * 画面に出す業務ルールは、Ph1共通テンプレートでは 1 期原文を去重したもの（layer 'fixed'）、
  * 系列テンプレートでは実 PDF の版式に合わせた系列固有のルール（layer 'user'）。
  * 実行時の 1 期原文（CLAUSE_COMPARE_RULES / clauseCompareBaseSystem）は別途保持し、
  * demo の送信内容は変えない。
@@ -474,17 +474,6 @@ const TEMPLATE_MODULES = [
     ],
   },
   {
-    id: 'exclusion',
-    name: '除外',
-    responsibility: 'ヘッダー・フッター・ページ番号・目次・著作権・免責を本文に含めない。',
-    businessRules: [
-      {
-        timing: 'scan',
-        text: 'Do not include headers, footers, page numbers, table of contents, copyright, disclaimer, watermark, document-distribution or legal boilerplate in clause text. Omit the clause id from the text field when it appears as a label.',
-      },
-    ],
-  },
-  {
     id: 'layout',
     name: 'レイアウト',
     responsibility: '改行・語間スペース・見出しと本文の結合。',
@@ -504,6 +493,18 @@ const TEMPLATE_MODULES = [
     name: '翻訳',
     responsibility: '訳文を付けるか、どの言語へ。規格番号・改訂記号は原文のまま。',
     businessRules: [],
+  },
+  {
+    // 「何を取るか」ではなく「何を落とすか」。画面では下に置き、色分けする。
+    id: 'exclusion',
+    name: '除外',
+    responsibility: 'ヘッダー・フッター・ページ番号・目次・著作権・免責を本文に含めない。',
+    businessRules: [
+      {
+        timing: 'scan',
+        text: 'Do not include headers, footers, page numbers, table of contents, copyright, disclaimer, watermark, document-distribution or legal boilerplate in clause text. Omit the clause id from the text field when it appears as a label.',
+      },
+    ],
   },
   {
     // 処理形式。画面には出さない。1 期の user メッセージ原文と揃えるためデータは保持する。
@@ -765,7 +766,7 @@ const SERIES_BY_ID = Object.fromEntries(SERIES_DEFS.map((item) => [item.id, item
 
 /**
  * テンプレートとして公開する系列（2026-10-16 ユーザー指定）。
- * AMS / ISAJT / AQ / FASOP の 4 系列＋1期共通テンプレート。
+ * AMS / ISAJT / AQ / FASOP の 4 系列＋Ph1共通テンプレート。
  * SERIES_DEFS には他系列の根拠データも残してあるが、画面には出さない。
  */
 const TEMPLATE_SERIES_IDS = ['ams', 'isajt', 'aq', 'fasop'];
@@ -777,7 +778,7 @@ const TIMING_LABELS = {
   text: CLAUSE_COMPARE_RULES.textLayer.label,
   // 1 期に翻訳規則は無いので、これは二期で追加する区分の名前（系列テンプレートだけが持つ）。
   common: '翻訳（抽出した条項に訳文を付ける）',
-  series: '追加ルール',
+  series: 'カスタムルール',
 };
 const TIMING_ORDER = ['scan', 'text', 'common', 'series'];
 
@@ -809,7 +810,7 @@ function mergeBusinessRuleItems(baseItems = [], extraItems = []) {
  *     ※アップロード時は選んだテンプレートだけが効くので、共通を落とすと漏れる。
  *   - 1 期の system プロンプト: 画面には載せない（実行時は baseSystemForTemplate が定数から返す）
  *   - 翻訳: 1 期に翻訳規則は無い。系列が自前の規則（translationRules）を持つときだけ入る
- *   - 追加ルール: 系列固有のルール（rules）。1期共通テンプレートでは空
+ *   - 追加ルール: 系列固有のルール（rules）。Ph1共通テンプレートでは空
  */
 export function buildModulesForTemplate(seriesId = null) {
   const def = seriesId ? SERIES_BY_ID[seriesId] : null;
@@ -847,13 +848,13 @@ export function buildModulesForTemplate(seriesId = null) {
       rules,
     };
   });
-  // 系列別の追加ルールは、どのテンプレートにも同じ位置・同じ名前で置く。
-  // 中身だけがテンプレートごとに違う（1期共通テンプレートは空）。
+  // 系列別のカスタムルールは、どのテンプレートにも同じ位置・同じ名前で置く。
+  // 中身だけがテンプレートごとに違う（Ph1共通テンプレートは空）。
   // draftRules は編集画面にだけ出る記入例。チェックで弾かれるため出力には混ざらない。
   const seriesModule = {
     id: 'series_rules',
-    name: '追加ルール',
-    responsibility: 'このテンプレートだけに適用する追加ルール。',
+    name: 'カスタムルール',
+    responsibility: 'このテンプレートだけに適用するカスタムルール。',
     rules: [...(def?.rules || []), ...(def?.draftRules || [])].map((text, index) => ({
       timing: 'series',
       layer: 'user',
@@ -861,7 +862,10 @@ export function buildModulesForTemplate(seriesId = null) {
       text,
     })),
   };
-  modules.splice(modules.length - 1, 0, seriesModule);
+  // 除外の直後・出力形式の直前へ。画面では「除外 → カスタムルール」の順になる。
+  const exclusionAt = modules.findIndex((mod) => mod.id === 'exclusion');
+  const insertAt = exclusionAt >= 0 ? exclusionAt + 1 : Math.max(modules.length - 1, 0);
+  modules.splice(insertAt, 0, seriesModule);
   return modules;
 }
 
@@ -897,7 +901,7 @@ export function renderUserRulesFromModules(modules = []) {
     .join('\n\n');
 }
 
-// 1期共通テンプレートの中身＝現行システムが実際に送っている user メッセージそのもの（JSON）。
+// Ph1共通テンプレートの中身＝現行システムが実際に送っている user メッセージそのもの（JSON）。
 // 実行時にシステムが差し込む値は {{...}} のプレースホルダで示す。見出し・注記は付けない。
 function renderClauseComparePrompt(seriesId = null) {
   const blocks = [CLAUSE_COMPARE_RULES.scan, CLAUSE_COMPARE_RULES.textLayer].map((section) => {
@@ -910,11 +914,11 @@ function renderClauseComparePrompt(seriesId = null) {
   });
   const def = seriesId ? SERIES_BY_ID[seriesId] : null;
   if (def && def.rules.length) {
-    const seriesLines = [`【C】${def.name} の追加ルール（この系列だけに適用）`];
+    const seriesLines = [`【C】${def.name} のカスタムルール（この系列だけに適用）`];
     def.rules.forEach((rule, index) => seriesLines.push(`${index + 1}. ${rule}`));
     blocks.push(seriesLines.join('\n'));
   } else if (def) {
-    blocks.push(`【C】${def.name} の追加ルールはまだありません。`);
+    blocks.push(`【C】${def.name} のカスタムルールはまだありません。`);
   }
   return blocks.join('\n\n');
 }
@@ -983,7 +987,7 @@ const SPEC_TREE_RULES = {
   },
 };
 
-// 1期共通テンプレートの中身＝現行システムが実際に送っている user メッセージそのもの（JSON）。
+// Ph1共通テンプレートの中身＝現行システムが実際に送っている user メッセージそのもの（JSON）。
 // 条件付きの 2 件は現行では instructions 配列の末尾に追記される。
 function renderSpecTreePrompt() {
   const payload = {
@@ -1004,7 +1008,7 @@ function renderSpecTreePrompt() {
  *   - system: qwen_truncated.json の業務 bullet（役割・Schema・OCR 入力説明は除く）
  *   - user: instructions/conditional のうち system と重複しない文
  * llm_sft（日语微调用）は現行デフォルトでは呼ばれないので載せない。
- * ユーザー追記は空の「追加ルール」へ。
+ * ユーザー追記は空の「カスタムルール」へ。
  */
 function specTreeBusinessRulesFromSystem(moduleId) {
   return SPEC_TREE_BASE_SYSTEM_BLOCKS.filter((block) => block.module === moduleId).map((block) => block.text);
@@ -1031,6 +1035,7 @@ const SPEC_TREE_MODULES = [
     businessRules: specTreeBusinessRulesFromSystem('spec_tree_normalization'),
   },
   {
+    // 「何を取るか」ではなく「何を落とすか」。画面では下に置き、色分けする。
     id: 'spec_tree_exclusion',
     name: '除外',
     responsibility: '参照として拾ってはいけないもの。',
@@ -1038,8 +1043,8 @@ const SPEC_TREE_MODULES = [
   },
   {
     id: 'spec_tree_series_rules',
-    name: '追加ルール',
-    responsibility: 'このテンプレートだけに追加するルール。',
+    name: 'カスタムルール',
+    responsibility: 'このテンプレートだけに適用するカスタムルール。',
     businessRules: [],
   },
 ];
@@ -1080,7 +1085,7 @@ export function renderSpecTreeRulesFromModules(modules = []) {
   return [`## ${SPEC_TREE_RULES.label}`, ...lines].join('\n');
 }
 
-/** 1期共通テンプレートの id。現行システムが実際に使っている 1 セット。 */
+/** Ph1共通テンプレートの id。現行システムが実際に使っている 1 セット。 */
 export const STANDARD_TEMPLATE_ID = 'standard';
 
 /**
@@ -1163,12 +1168,12 @@ export function createInitialPromptTemplateConfigs() {
   };
 
   return [
-    // 1期共通テンプレート＝1 期が実際に使っている 1 セット（system プロンプト＋抽出ルール）。
+    // Ph1共通テンプレート＝1 期が実際に使っている 1 セット（system プロンプト＋抽出ルール）。
     // 全テンプレートの基準なので読み取り専用。顧客に見せるが、書き換えはさせない。
     build(null, {
       id: STANDARD_TEMPLATE_ID,
       series: ['全系列共通'],
-      name: '1期共通テンプレート',
+      name: 'Ph1共通テンプレート',
       isDefault: true,
       isStandard: true,
       readOnly: true,

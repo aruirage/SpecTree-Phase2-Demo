@@ -50,7 +50,7 @@ const specTreeExpanded = reactive({});
 const specTreeChecks = reactive({});
 const specTreeChecking = reactive({});
 const specTreePromptTemplateId = ref('standard');
-// 編集画面に出すモジュール。空モジュールは出さないが、「追加ルール」だけは追記用に空でも残す。
+// 編集画面に出すモジュール。空モジュールは出さないが、「カスタムルール」だけは追記用に空でも残す。
 const editableSpecTreeModules = computed(() =>
   specTreeModules.value.filter((mod) => {
     if (mod.hidden) return false;
@@ -58,6 +58,10 @@ const editableSpecTreeModules = computed(() =>
     return mod.id === 'spec_tree_series_rules';
   }),
 );
+
+function isSpecTreeExclusionModule(mod) {
+  return mod?.id === 'spec_tree_exclusion';
+}
 
 function visibleSpecTreeRules(mod) {
   return (mod.rules || [])
@@ -2132,11 +2136,19 @@ watch(rootFileIds, () => {
           v-for="mod in editableSpecTreeModules"
           :key="mod.id"
           class="stp-card"
-          :class="{ open: isSpecTreeModuleOpen(mod.id) }"
+          :class="{ open: isSpecTreeModuleOpen(mod.id), exclusion: isSpecTreeExclusionModule(mod) }"
         >
           <header class="stp-head" @click="toggleSpecTreeModule(mod.id)">
             <span class="stp-caret" aria-hidden="true"></span>
             <h4>{{ mod.name }}</h4>
+            <el-tooltip
+              v-if="mod.responsibility"
+              :content="mod.responsibility"
+              placement="top"
+              :show-after="180"
+            >
+              <button type="button" class="stp-note" aria-label="モジュールの説明" @click.stop>i</button>
+            </el-tooltip>
             <el-button size="small" class="stp-check" :loading="specTreeChecking[mod.id]" @click.stop="checkSpecTreeModule(mod)">チェック</el-button>
           </header>
           <div v-show="isSpecTreeModuleOpen(mod.id)" class="stp-body">
@@ -3508,6 +3520,14 @@ watch(rootFileIds, () => {
   background: #fff;
 }
 
+.stp-card.exclusion {
+  border-left: 3px solid #7d8ea3;
+}
+
+.stp-card.exclusion .stp-head h4 {
+  color: #4b5d73;
+}
+
 .stp-head {
   display: flex;
   align-items: center;
@@ -3527,6 +3547,26 @@ watch(rootFileIds, () => {
   font-size: 13.5px;
   font-weight: 500;
 }
+
+.stp-note {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid #c5d0dc;
+  border-radius: 50%;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 11px;
+  font-style: italic;
+  font-family: Georgia, "Times New Roman", serif;
+  line-height: 1;
+  cursor: help;
+}
+
+.stp-note:hover { color: #1e3a5f; border-color: #1e3a5f; }
 
 .stp-caret {
   width: 0;

@@ -68,12 +68,12 @@ router.get('/:id', (req, res) => {
 router.put('/:id', (req, res) => {
   const template = findTemplate(req.params.id);
   if (!template) return res.status(404).json({ error: 'prompt template not found' });
-  // 1期共通テンプレートは条項比較の基準なので読み取り専用（変更する場合はコピーしてから編集する）。
+  // Ph1共通テンプレートは条項比較の基準なので読み取り専用（変更する場合はコピーしてから編集する）。
   // ただし仕様ツリーの抽出ルールは全規格で 1 本しかなく、これ自体が編集対象なので保存を許可する。
   const CLAUSE_COMPARE_FIELDS = ['name', 'modules', 'userRules', 'promptText', 'published'];
   const touchesClauseCompare = CLAUSE_COMPARE_FIELDS.some((field) => Object.hasOwn(req.body || {}, field));
   if (template.readOnly && touchesClauseCompare) {
-    return res.status(400).json({ error: '1期共通テンプレートは読み取り専用です（変更する場合はコピーしてから編集してください）' });
+    return res.status(400).json({ error: 'Ph1共通テンプレートは読み取り専用です（変更する場合はコピーしてから編集してください）' });
   }
 
   // 先に組み立て結果を仮計算し、無効ルールがあれば保存しない（テンプレートを汚さない）。
@@ -139,7 +139,7 @@ router.delete('/:id', (req, res) => {
   if (index < 0) return res.status(404).json({ error: 'prompt template not found' });
   const target = store.promptTemplateConfigs[index];
   // 初期状態に戻す基準を持つテンプレート（標準 + 初期系列）は削除できない。
-  if (target.isStandard) return res.status(400).json({ error: '1期共通テンプレートは削除できません（初期状態に戻す際の基準です）' });
+  if (target.isStandard) return res.status(400).json({ error: 'Ph1共通テンプレートは削除できません（初期状態に戻す際の基準です）' });
   if (target.isDefault) return res.status(400).json({ error: '初期テンプレートは削除できません（初期状態に戻す際の基準です）' });
   store.promptTemplateConfigs.splice(index, 1);
   res.status(204).end();

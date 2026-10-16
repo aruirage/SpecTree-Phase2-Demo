@@ -28,7 +28,7 @@ const selectedTemplate = computed(
 );
 
 // 編集画面に出すモジュール。hidden（処理形式）は出さない。
-// 中身が空のモジュールは出さないが、「追加ルール」だけは追記用に空でも残す。
+// 中身が空のモジュールは出さないが、「カスタムルール」だけは追記用に空でも残す。
 const visibleModules = computed(() =>
   form.modules.filter((mod) => {
     if (mod.hidden) return false;
@@ -36,6 +36,10 @@ const visibleModules = computed(() =>
     return mod.id === 'series_rules';
   }),
 );
+
+function isExclusionModule(mod) {
+  return mod?.id === 'exclusion';
+}
 
 // 1期共通テンプレートは 1 期の 1 セットそのもの。全テンプレートの基準なので読み取り専用。
 const readOnlyTemplate = computed(() => selectedTemplate.value?.readOnly === true);
@@ -336,11 +340,19 @@ onMounted(loadTemplates);
             v-for="mod in visibleModules"
             :key="mod.id"
             class="module-card"
-            :class="{ open: isOpen(mod.id), locked: isLockedModule(mod) }"
+            :class="{ open: isOpen(mod.id), locked: isLockedModule(mod), exclusion: isExclusionModule(mod) }"
           >
             <header class="module-head" @click="toggleModule(mod.id)">
               <span class="caret" aria-hidden="true"></span>
               <h3>{{ mod.name }}</h3>
+              <el-tooltip
+                v-if="mod.responsibility"
+                :content="mod.responsibility"
+                placement="top"
+                :show-after="180"
+              >
+                <button type="button" class="module-note" aria-label="モジュールの説明" @click.stop>i</button>
+              </el-tooltip>
               <el-button v-if="!isLockedModule(mod)" size="small" class="check-btn" :loading="checking[mod.id]" @click.stop="checkModule(mod)">チェック</el-button>
             </header>
 
@@ -476,6 +488,14 @@ onMounted(loadTemplates);
 
 .module-card { border: 1px solid #eef1f5; border-radius: 6px; background: #fff; }
 
+.module-card.exclusion {
+  border-left: 3px solid #7d8ea3;
+}
+
+.module-card.exclusion .module-head h3 {
+  color: #4b5d73;
+}
+
 .module-head {
   display: flex;
   align-items: center;
@@ -499,6 +519,26 @@ onMounted(loadTemplates);
 .module-card.open .caret { transform: rotate(90deg); }
 
 .module-head h3 { margin: 0; color: #1e3a5f; font-size: 14px; font-weight: 500; }
+
+.module-note {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid #c5d0dc;
+  border-radius: 50%;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 11px;
+  font-style: italic;
+  font-family: Georgia, "Times New Roman", serif;
+  line-height: 1;
+  cursor: help;
+}
+
+.module-note:hover { color: #1e3a5f; border-color: #1e3a5f; }
 
 .check-btn { margin-left: auto; border-radius: 4px; }
 
