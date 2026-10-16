@@ -2,7 +2,12 @@ const API_BASE = '/api/prompt-templates';
 
 async function parseResponse(response) {
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
+  if (!response.ok) {
+    const error = new Error(data.error || `Request failed (${response.status})`);
+    error.status = response.status;
+    error.rejected = data.rejected || [];
+    throw error;
+  }
   return data;
 }
 
@@ -32,6 +37,14 @@ export async function deletePromptTemplate(id) {
 
 export async function resetPromptTemplate(id) {
   return parseResponse(await fetch(`${API_BASE}/${encodeURIComponent(id)}/reset`, { method: 'POST' }));
+}
+
+export async function analyzePromptTemplate(id, payload = {}) {
+  return parseResponse(await fetch(`${API_BASE}/${encodeURIComponent(id)}/analyze`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }));
 }
 
 export async function testPromptTemplate(id, file, promptType = 'clause_compare', promptOverride = '') {

@@ -47,6 +47,9 @@ const activeResultSessionId = ref('');
 const status       = ref('');
 const error        = ref('');
 const running      = ref(false);
+// 改配ダイアログ（選択式）
+const repairDialog = ref(null);              // { clauseId, targetRowId }
+const repairVisible = ref(false);
 const stoppingRun  = ref(false);
 const activeStatusFilters = ref([]);
 const activeClauseTab = ref('compare');
@@ -80,6 +83,14 @@ const changeStatuses = new Set(['追加', '削除', '変更']);
 const detailedChangeTypesEnabled = computed(() => result.value?.detailedChangeTypesEnabled !== false);
 const showImageColumns = true;
 const revSectionColspan = computed(() => (showImageColumns ? 4 : 3));
+// 比較結果の表ヘッダーは旧/新ファイル名（拡張子なし）で表示する
+const stripExtension = (name) => String(name || '').replace(/\.[^.]+$/, '');
+const oldHeaderLabel = computed(() => (
+  stripExtension(result.value?.oldFileName || oldFile.value?.fileName) || '【旧】REV'
+));
+const newHeaderLabel = computed(() => (
+  stripExtension(result.value?.newFileName || newFile.value?.fileName) || '【新】REV'
+));
 const diffSegmentCache = new Map();
 const MAX_TOKEN_DIFF_CELLS = 160000;
 const MAX_UPLOAD_FILE_SIZE_MB = 30;
@@ -273,6 +284,9 @@ function summarizeHttpStatus(status) {
 }
 
 // ── Upload ─────────────────────────────────────────────────────────────────
+// リスクデモフラグ：URL に ?riskDemo=1 を付けると抽出/対齐リスク付きの条項を表示
+const riskDemoEnabled = ref(new URLSearchParams(window.location.search).get('riskDemo') === '1');
+
 async function uploadFile(file, fileType) {
   if (!canUpload.value) return;
   const setUploading = fileType === 'old' ? (v) => { oldUploading.value = v; } : (v) => { newUploading.value = v; };
@@ -293,6 +307,7 @@ async function uploadFile(file, fileType) {
       body: JSON.stringify({
         fileType,
         sessionId: sharedSessionId.value,
+        riskDemo: riskDemoEnabled.value,
         file: {
           name: file.name,
           size: file.size,
@@ -768,7 +783,451 @@ function statusClass(clause) {
 }
 
 function needsReview(clause) {
-  return clause?.reviewRequired === true || clause?.review_required === true;
+  return clause?.reviewRequired === true || clause?.review_required === true || unconfirmedWarnings(clause).length > 0;
+}
+
+// ── リスク警告（要確認）ヘルパー ─────────────────────────────────────────
+function clauseWarnings(clause) {
+  return Array.isArray(clause?.reviewWarnings) ? clause.reviewWarnings : [];
+}
+function unconfirmedWarnings(clause) {
+  return clauseWarnings(clause).filter((w) => !w.confirmedAt);
+}
+// 画像の所属リスク（misclassified）があるか
+function hasImageRisk(clause, side) {
+  return unconfirmedWarnings(clause).some((w) => w.type === 'misclassified' && (w.side === side || w.side === 'pair'));
+}
+const totalReviewWarnings = computed(() => {
+  if (!result.value) return 0;
+  return (result.value.clauses || []).reduce((n, c) => n + unconfirmedWarnings(c).length, 0);
+});
+const reviewFilterOnly = ref(false);
+const warnTypeLabel = (type) => ({
+  'low-similarity': '類似度低',
+  duplicate: '重複',
+  misclassified: '誤分類',
+  incomplete: '内容不完全',
+}[type] || type);
+const warnTitle = (clause) => {
+  const reasons = unconfirmedWarnings(clause).map((w) => w.reason).filter(Boolean);
+  return reasons.length ? reasons.join(' / ') : '要確認';
+};
+
+// 対齐（align）リスクだけ確認済みにする（抽出リスクとは独立）
+function confirmAlignWarnings(clause) {
+  return clauseWarnings(clause).map((w) => (
+    w.source === 'align' && !w.confirmedAt
+      ? { ...w, confirmedAt: new Date().toISOString(), confirmedBy: 'user' }
+      : w
+  ));
+}
+// 抽出リスクのみ残す（改配で対齐リスクは失効するが、抽出リスクはテキストに付随して残る）
+function keepExtractWarnings(clause) {
+  return clauseWarnings(clause).filter((w) => w.source === 'extract');
+}
+// 指定行の全リスクを確認済みにする
+function confirmAllWarnings(clause) {
+  return clauseWarnings(clause).map((w) => (
+    !w.confirmedAt
+      ? { ...w, confirmedAt: new Date().toISOString(), confirmedBy: 'user' }
+      : w
+  ));
+}
+
+// ── 改配ダイアログ（選択式）：新条項をどの旧条項に付け替えるか選ぶ ──
+function openRepair(clause) {
+  repairDialog.value = { clauseId: clause.id, targetRowId: clause.id };
+  repairVisible.value = true;
+  repairCandidates.value = [];
+  loadRepairCandidates();
+}
+function closeRepair() {
+  repairVisible.value = false;
+  repairDialog.value = null;
+}
+
+// 現在の新条項と各旧条項の類似度（候補の並び順に使う）
+function textSimilarity(a, b) {
+  const tokenize = (t) => String(t || '').toLowerCase().split(/[^a-z0-9\u4e00-\u9fa5]+/).filter(Boolean);
+  const ta = tokenize(a);
+  const tb = tokenize(b);
+  if (!ta.length || !tb.length) return 0;
+  const setA = new Set(ta);
+  const setB = new Set(tb);
+  let hit = 0;
+  setB.forEach((t) => { if (setA.has(t)) hit += 1; });
+  return hit / new Set([...setA, ...setB]).size;
+}
+
+// 改配候補：バックエンドの Needleman-Wunsch 類似度で並べる（非同期取得）
+const repairCandidates = ref([]);
+const repairCandidatesLoading = ref(false);
+
+async function loadRepairCandidates() {
+  const d = repairDialog.value;
+  if (!d) return;
+  const clauses = Array.isArray(result.value?.clauses) ? result.value.clauses : [];
+  const cur = clauses.find((c) => c.id === d.clauseId);
+  if (!cur) return;
+  const oldToNew = repairDirection.value === 'old-to-new';
+  const curText = oldToNew ? cur.oldContent : cur.newContent;
+  const candidates = clauses
+    .filter((c) => (oldToNew ? (c.newContent || c.newClauseNumber) : (c.oldContent || c.oldClauseNumber)))
+    .map((c) => ({
+      id: c.id,
+      label: oldToNew ? (c.newClauseNumber || '新条項') : (c.oldClauseNumber || '旧条項'),
+      snippet: String(oldToNew ? (c.newContent || '') : (c.oldContent || '')).slice(0, 60),
+      target: String(oldToNew ? (c.newContent || '') : (c.oldContent || '')),
+      similarity: 0,
+    }));
+  // バックエンドで Needleman-Wunsch 類似度を一括計算
+  repairCandidatesLoading.value = true;
+  try {
+    const res = await fetch('/api/clause-compare/similarity', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pairs: candidates.map((c) => [curText, c.target]) }),
+    });
+    const data = await res.json();
+    if (Array.isArray(data.similarities)) {
+      candidates.forEach((c, i) => { c.similarity = Number(data.similarities[i]) || 0; });
+    }
+  } catch {
+    // バックエンド取得失敗時はローカル Jaccard にフォールバック
+    candidates.forEach((c) => { c.similarity = textSimilarity(curText, c.target); });
+  }
+  candidates.sort((a, b) => b.similarity - a.similarity);
+  repairCandidates.value = candidates.slice(0, 5);
+  repairCandidatesLoading.value = false;
+}
+
+// 改配の方向：行に新条項があれば新→旧、旧条項のみ（保留）なら旧→新
+const repairDirection = computed(() => {
+  const d = repairDialog.value;
+  if (!d) return 'new-to-old';
+  const clauses = Array.isArray(result.value?.clauses) ? result.value.clauses : [];
+  const cur = clauses.find((c) => c.id === d.clauseId);
+  if (!cur) return 'new-to-old';
+  const hasNew = !!(cur.newContent || cur.newClauseNumber);
+  const hasOld = !!(cur.oldContent || cur.oldClauseNumber);
+  return !hasNew && hasOld ? 'old-to-new' : 'new-to-old';
+});
+
+// 改配ダイアログ：現在のペア表示用
+const currentRepairPairLabel = computed(() => {
+  const d = repairDialog.value;
+  if (!d) return '';
+  const clauses = Array.isArray(result.value?.clauses) ? result.value.clauses : [];
+  const cur = clauses.find((c) => c.id === d.clauseId);
+  const tgt = clauses.find((c) => c.id === d.targetRowId);
+  if (!cur || !tgt) return '';
+  return repairDirection.value === 'old-to-new'
+    ? `${cur.oldClauseNumber || '旧'} | ${tgt.newClauseNumber || '新'}`
+    : `${tgt.oldClauseNumber || '旧'} | ${cur.newClauseNumber || '新'}`;
+});
+const currentRepairSimilarity = computed(() => {
+  const d = repairDialog.value;
+  if (!d) return 0;
+  const cand = repairCandidates.value.find((c) => c.id === d.targetRowId);
+  return cand?.similarity || 0;
+});
+
+function confirmRepair() {
+  const d = repairDialog.value;
+  if (!d) return;
+  if (d.targetRowId === d.clauseId) {
+    // 現在のペアのまま確認 → 対齐（類似度）リスクを確認済みにする（抽出リスクは独立）
+    const clauses = (Array.isArray(result.value?.clauses) ? result.value.clauses : [])
+      .map((c) => (c.id === d.clauseId ? { ...c, reviewWarnings: confirmAlignWarnings(c) } : c));
+    result.value = { ...result.value, clauses };
+    closeRepair();
+    return;
+  }
+  snapshotBeforeChange();
+  if (repairDirection.value === 'old-to-new') {
+    pairOldToNew(d.clauseId, d.targetRowId);
+  } else {
+    pairNewToOld(d.clauseId, d.targetRowId);
+  }
+  closeRepair();
+}
+
+// ── 改配のアンドゥ（単一ステップ） ─────────────────────────────
+const undoSnapshot = ref(null); // { clauses }
+const canUndoRepair = computed(() => Boolean(undoSnapshot.value));
+
+function snapshotBeforeChange() {
+  undoSnapshot.value = {
+    clauses: JSON.parse(JSON.stringify(result.value?.clauses || [])),
+  };
+}
+
+function undoRepair() {
+  if (!undoSnapshot.value) return;
+  result.value = { ...result.value, clauses: undoSnapshot.value.clauses };
+  undoSnapshot.value = null;
+  repairVisible.value = false;
+  repairDialog.value = null;
+}
+
+// 旧条項のみの行（保留）が新条項とペアリングする（新ペア = ソースの旧 + ターゲットの新）
+function pairOldToNew(srcClauseId, targetClauseId) {
+  const clauses = Array.isArray(result.value?.clauses) ? result.value.clauses : [];
+  const src = clauses.find((c) => c.id === srcClauseId);
+  const dst = clauses.find((c) => c.id === targetClauseId);
+  if (!src || !dst || src.id === dst.id) return;
+  if (!(src.oldContent || src.oldClauseNumber)) return;
+  if (!(dst.newContent || dst.newClauseNumber)) return;
+
+  const newId = `re-${Date.now()}-${srcClauseId}`;
+  const newPair = {
+    id: newId,
+    oldClauseNumber: src.oldClauseNumber,
+    oldContent: src.oldContent,
+    oldTranslation: src.oldTranslation,
+    oldImages: Array.isArray(src.oldImages) ? src.oldImages : [],
+    newClauseNumber: dst.newClauseNumber,
+    newContent: dst.newContent,
+    newTranslation: dst.newTranslation,
+    newImages: Array.isArray(dst.newImages) ? dst.newImages : [],
+    status: derivePairStatus(src.oldContent, dst.newContent),
+    reviewWarnings: [...keepExtractWarnings(src), ...keepExtractWarnings(dst)],
+  };
+
+  const next = [];
+  for (const c of clauses) {
+    if (c.id === src.id) {
+      next.push(newPair); // ソース行の位置に新ペア（旧条項の順序を保つ）
+      continue;
+    }
+    if (c.id === dst.id) {
+      if (c.oldContent || c.oldClauseNumber) {
+        // ターゲット行の旧条項が取り除かれ孤児になる（元の位置を維持、無法配對は削除）
+        next.push({ ...c, newClauseNumber: '', newContent: '', newTranslation: '', newImages: [], status: '削除', reviewWarnings: keepExtractWarnings(c) });
+      }
+      // ターゲットが追加行（旧条項なし）なら行ごと取り除く
+      continue;
+    }
+    next.push(c);
+  }
+  result.value = { ...result.value, clauses: next };
+}
+
+// 改配適用：ソース行の「新条項」をターゲット行の「旧条項」に付け替える（新ペア = ターゲットの旧 + ソースの新）
+function pairNewToOld(srcClauseId, targetClauseId) {
+  const clauses = Array.isArray(result.value?.clauses) ? result.value.clauses : [];
+  const src = clauses.find((c) => c.id === srcClauseId);
+  const dst = clauses.find((c) => c.id === targetClauseId);
+  if (!src || !dst || src.id === dst.id) return;
+  if (!(src.newContent || src.newClauseNumber)) return; // ソースに新条項がない（旧条項のみ）行は対象外
+  if (!(dst.oldContent || dst.oldClauseNumber)) return; // ターゲットに旧条項がない行は対象外
+
+  const newId = `re-${Date.now()}-${srcClauseId}`;
+  const newPair = {
+    id: newId,
+    oldClauseNumber: dst.oldClauseNumber,
+    oldContent: dst.oldContent,
+    oldTranslation: dst.oldTranslation,
+    oldImages: Array.isArray(dst.oldImages) ? dst.oldImages : [],
+    newClauseNumber: src.newClauseNumber,
+    newContent: src.newContent,
+    newTranslation: src.newTranslation,
+    newImages: Array.isArray(src.newImages) ? src.newImages : [],
+    status: derivePairStatus(dst.oldContent, src.newContent),
+    reviewWarnings: [...keepExtractWarnings(dst), ...keepExtractWarnings(src)],
+  };
+
+  const next = [];
+  for (const c of clauses) {
+    if (c.id === dst.id) {
+      next.push(newPair); // ターゲット行の位置に新ペア（旧=ターゲットの旧条項）
+      continue;
+    }
+    if (c.id === src.id) {
+      // ソース行の旧条項は取り除かれ孤児になる（元の位置を維持して旧条項の順序を保つ）
+      if (c.oldContent || c.oldClauseNumber) {
+        next.push({ ...c, newClauseNumber: '', newContent: '', newTranslation: '', newImages: [], status: '削除', reviewWarnings: keepExtractWarnings(c) });
+      }
+      continue; // ソースが追加行（旧条項なし）なら行ごと取り除く
+    }
+    next.push(c);
+  }
+  // ターゲット行の旧新条項が奪われて残った新条項 → 孤児（末尾）
+  if (dst.newContent || dst.newClauseNumber) {
+    next.push({
+      id: `add-${Date.now()}-${dst.id}`,
+      oldClauseNumber: '',
+      oldContent: '',
+      oldTranslation: '',
+      oldImages: [],
+      newClauseNumber: dst.newClauseNumber,
+      newContent: dst.newContent,
+      newTranslation: dst.newTranslation,
+      newImages: Array.isArray(dst.newImages) ? dst.newImages : [],
+      status: '追加',
+      reviewWarnings: keepExtractWarnings(dst),
+    });
+  }
+  result.value = { ...result.value, clauses: next };
+}
+
+function derivePairStatus(oldText, newText) {
+  const a = String(oldText || '').trim();
+  const b = String(newText || '').trim();
+  return a && b && a === b ? '無' : '変更';
+}
+
+// リスク種別に応じた処理を開始する（要確認の感叹号クリックで呼ばれる）
+function handleReviewAction(clause) {
+  if (!clause) return;
+  const warnings = unconfirmedWarnings(clause);
+  const w = warnings[0];
+  if (!w) return;
+  if (w.type === 'low-similarity') {
+    openRepair(clause);
+    return;
+  }
+  if (w.type === 'misclassified') {
+    // 画像の所属修正：該当 side の先頭画像を移動
+    const side = w.side === 'old' ? 'old' : 'new';
+    const images = side === 'old' ? clause.oldImages : clause.newImages;
+    if (Array.isArray(images) && images.length > 0) {
+      openMoveImage(clause, side, 0);
+      return;
+    }
+    return;
+  }
+  // incomplete（内容不全）→ 新側内容を編集
+  if (w.type === 'incomplete') {
+    startEdit(clause, 'newContent');
+    return;
+  }
+  // その他 → 全リスク確認で解消
+  snapshotBeforeChange();
+  const clauses = (result.value?.clauses || []).map((c) => (c.id === clause.id ? { ...c, reviewWarnings: confirmAllWarnings(c) } : c));
+  result.value = { ...result.value, clauses };
+}
+
+// ── 抽出テキスト編集（要確認の抽出リスクを手動修正：内容不全・条番号誤り） ──
+const editingClause = ref(null); // { clauseId, field: 'oldContent'|'newContent'|'oldClauseNumber'|'newClauseNumber', draft }
+
+function startEdit(clause, field) {
+  editingClause.value = {
+    clauseId: clause.id,
+    field,
+    draft: String(clause[field] || ''),
+  };
+}
+function cancelEdit() {
+  editingClause.value = null;
+}
+function isEditing(clauseId, field) {
+  return editingClause.value?.clauseId === clauseId && editingClause.value?.field === field;
+}
+
+// 編集保存：抽出リスク確認 + 判定・diff 再計算 + 対齐類似度の再検証
+async function saveEdit() {
+  const e = editingClause.value;
+  if (!e) return;
+  snapshotBeforeChange();
+  const now = new Date().toISOString();
+  const nextClauses = (result.value?.clauses || []).map((c) => {
+    if (c.id !== e.clauseId) return c;
+    const next = { ...c };
+    next[e.field] = e.draft;
+    next.status = derivePairStatus(next.oldContent, next.newContent);
+    next.edited = { field: e.field, at: now, by: 'user' };
+    // 抽出リスクは手動修正で解決 → 確認済みにする（対齐リスクは再検証対象）
+    next.reviewWarnings = clauseWarnings(c).map((w) => (
+      w.source === 'extract' && !w.confirmedAt
+        ? { ...w, confirmedAt: now, confirmedBy: 'user-edit' }
+        : w
+    ));
+    return next;
+  });
+  result.value = { ...result.value, clauses: nextClauses };
+  editingClause.value = null;
+  await recheckAlignSimilarity(e.clauseId);
+}
+
+// 編集後に残った対齐リスクを再検証（類似度が上がれば自動確認）
+async function recheckAlignSimilarity(clauseId) {
+  const clause = (result.value?.clauses || []).find((c) => c.id === clauseId);
+  if (!clause) return;
+  const hasAlign = clauseWarnings(clause).some((w) => w.source === 'align' && !w.confirmedAt);
+  if (!hasAlign) return;
+  const a = String(clause.oldContent || '');
+  const b = String(clause.newContent || '');
+  if (!a || !b) return;
+  let sim = 0;
+  try {
+    const res = await fetch('/api/clause-compare/similarity', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pairs: [[a, b]] }),
+    });
+    const data = await res.json();
+    sim = Number(data.similarities?.[0]) || 0;
+  } catch {
+    sim = textSimilarity(a, b);
+  }
+  if (sim >= 0.55) {
+    const clauses = (result.value?.clauses || []).map((c) => (c.id === clauseId ? { ...c, reviewWarnings: confirmAlignWarnings(c) } : c));
+    result.value = { ...result.value, clauses };
+  }
+}
+
+// ── 画像の所属修正（画像を別の条項へ移動） ───────────────────────────────
+const moveImageDialog = ref(null); // { clauseId, imageIndex, side }
+const moveImageVisible = ref(false);
+const moveImageTargets = computed(() => {
+  if (!moveImageDialog.value) return [];
+  const clauses = Array.isArray(result.value?.clauses) ? result.value.clauses : [];
+  const d = moveImageDialog.value;
+  return clauses
+    .filter((c) => c.id !== d.clauseId && (c.oldContent || c.oldClauseNumber || c.newContent || c.newClauseNumber))
+    .map((c) => ({ id: c.id, label: c.oldClauseNumber || c.newClauseNumber || '条項', snippet: String(c.oldContent || c.newContent || '').slice(0, 50) }));
+});
+
+function openMoveImage(clause, side, imageIndex) {
+  moveImageDialog.value = { clauseId: clause.id, side, imageIndex };
+  moveImageVisible.value = true;
+}
+function closeMoveImage() {
+  moveImageVisible.value = false;
+  moveImageDialog.value = null;
+}
+// 画像をターゲット条項に移動（同じ side の画像リストへ追加、元からは削除）
+function confirmMoveImage(targetClauseId) {
+  const d = moveImageDialog.value;
+  if (!d) return;
+  snapshotBeforeChange();
+  const clauses = (result.value?.clauses || []).map((c) => {
+    if (c.id === d.clauseId) {
+      const listKey = d.side === 'old' ? 'oldImages' : 'newImages';
+      const next = { ...c };
+      const list = Array.isArray(c[listKey]) ? [...c[listKey]] : [];
+      list.splice(d.imageIndex, 1);
+      next[listKey] = list;
+      // 画像リスク（misclassified）は手動修正で解決
+      next.reviewWarnings = clauseWarnings(c).map((w) => (
+        w.source === 'extract' && w.type === 'misclassified' && !w.confirmedAt
+          ? { ...w, confirmedAt: new Date().toISOString(), confirmedBy: 'user-move' }
+          : w
+      ));
+      return next;
+    }
+    if (c.id === targetClauseId) {
+      const listKey = d.side === 'old' ? 'oldImages' : 'newImages';
+      const srcClause = (result.value?.clauses || []).find((x) => x.id === d.clauseId);
+      const img = srcClause?.[listKey]?.[d.imageIndex];
+      if (!img) return c;
+      return { ...c, [listKey]: [...(Array.isArray(c[listKey]) ? c[listKey] : []), img] };
+    }
+    return c;
+  });
+  result.value = { ...result.value, clauses };
+  closeMoveImage();
 }
 
 function contentSegments(clause, side) {
@@ -916,22 +1375,21 @@ const canRun = computed(() => !!oldFile.value && !!newFile.value && !running.val
 
 const filteredClauses = computed(() => {
   if (!result.value) return [];
-  if (activeStatusFilters.value.length === 0) return result.value.clauses;
-  const selected = new Set(activeStatusFilters.value);
-  return result.value.clauses.filter(c => selected.has(normalizeChangeStatus(c)));
-});
-
-const activeStatusFilterLabel = computed(() => {
-  if (activeStatusFilters.value.length === 0) return 'すべて';
-  if (activeStatusFilters.value.length === 1) {
-    return STATUS_FILTERS.find((item) => item.key === activeStatusFilters.value[0])?.label || 'すべて';
+  let list = result.value.clauses;
+  if (reviewFilterOnly.value) {
+    list = list.filter((c) => needsReview(c));
   }
-  return `選択 ${activeStatusFilters.value.length}`;
+  if (activeStatusFilters.value.length > 0) {
+    const selected = new Set(activeStatusFilters.value);
+    list = list.filter(c => selected.has(normalizeChangeStatus(c)));
+  }
+  return list;
 });
 
 function handleStatusFilterCommand(command) {
   if (command === 'all') {
     activeStatusFilters.value = [];
+    reviewFilterOnly.value = false;
     return;
   }
   const selected = new Set(activeStatusFilters.value);
@@ -1008,6 +1466,12 @@ function ensureScrollableContent() {
 
 watch(activeStatusFilters, () => {
   resetVisibleClauses();
+});
+
+// 結果セッションが切り替わったら確認状態をリセットする（旧結果の確認が新結果に残らないように）
+watch([activeResultSessionId, sharedSessionId], () => {
+  repairDialog.value = null;
+  repairVisible.value = false;
 });
 
 watch(displayedClauseTotal, () => {
@@ -1187,7 +1651,7 @@ onBeforeUnmount(() => {
         :class="{ active: activeClauseTab === 'prompt' }"
         @click="activeClauseTab = 'prompt'"
       >
-        Prompt設定
+        抽出ルール設定
       </button>
     </div>
 
@@ -1203,7 +1667,7 @@ onBeforeUnmount(() => {
         <div class="panel-config">
 
         <div class="section prompt-template-section">
-          <label class="section-label">抽出Prompt</label>
+          <label class="section-label">抽出ルール設定</label>
           <select v-model="selectedPromptTemplateId" class="prompt-template-select">
             <option v-for="template in promptTemplates" :key="template.id" :value="template.id">{{ template.name }}</option>
           </select>
@@ -1388,71 +1852,58 @@ onBeforeUnmount(() => {
         <div class="toolbar-left">
           <span class="toolbar-title">比較結果</span>
           <template v-if="result">
-            <span class="badge badge-secondary">合計 {{ result.totalClauses }} 件</span>
-            <span class="badge badge-changed">変更 {{ result.changedClauses }} 件</span>
-            <span class="badge badge-added">追加 {{ addedClauseCount }} 件</span>
-            <span class="badge badge-deleted">削除 {{ deletedClauseCount }} 件</span>
+            <button
+              class="badge badge-secondary badge-filter"
+              :class="{ 'badge-filter-active': activeStatusFilters.length === 0 && !reviewFilterOnly }"
+              :title="'すべて表示'"
+              @click="handleStatusFilterCommand('all')"
+            >合計 {{ result.totalClauses }} 件</button>
+            <button
+              class="badge badge-changed badge-filter"
+              :class="{ 'badge-filter-active': activeStatusFilters.includes('変更') }"
+              :title="'「変更」の条項のみ表示'"
+              @click="handleStatusFilterCommand('変更')"
+            >変更 {{ result.changedClauses }} 件</button>
+            <button
+              class="badge badge-added badge-filter"
+              :class="{ 'badge-filter-active': activeStatusFilters.includes('追加') }"
+              :title="'「追加」の条項のみ表示'"
+              @click="handleStatusFilterCommand('追加')"
+            >追加 {{ addedClauseCount }} 件</button>
+            <button
+              class="badge badge-deleted badge-filter"
+              :class="{ 'badge-filter-active': activeStatusFilters.includes('削除') }"
+              :title="'「削除」の条項のみ表示'"
+              @click="handleStatusFilterCommand('削除')"
+            >削除 {{ deletedClauseCount }} 件</button>
+            <button
+              v-if="totalReviewWarnings > 0"
+              class="badge badge-review"
+              :class="{ 'badge-review-active': reviewFilterOnly }"
+              :title="reviewFilterOnly ? '要確認のある条項のみ表示中（クリックで解除）' : '要確認のある条項のみ表示する'"
+              @click="reviewFilterOnly = !reviewFilterOnly"
+            >要確認 {{ totalReviewWarnings }}</button>
             <span v-if="activeStatusFilters.length > 0" class="badge badge-secondary">表示 {{ displayedClauseTotal }} 件</span>
           </template>
         </div>
         <div class="toolbar-right">
-          <el-dropdown
-            trigger="click"
-            :disabled="!result"
-            :teleported="!resultFullscreen"
-            :hide-on-click="false"
-            @command="handleStatusFilterCommand"
+          <button
+            v-if="canUndoRepair"
+            class="btn btn-outline btn-sm btn-icon toolbar-compact-icon undo-icon-btn"
+            title="最後の改配を取り消す（改配前の状態に戻す）"
+            @click="undoRepair"
           >
-            <button
-              class="btn btn-sm toolbar-compact-btn"
-              :class="activeStatusFilters.length > 0 ? 'btn-filter-active' : 'btn-outline'"
-              :disabled="!result"
-            >
-              <svg class="icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <polygon points="22,3 2,3 10,12.46 10,19 14,21 14,12.46 22,3"/>
-              </svg>
-              {{ activeStatusFilterLabel }}
-              <svg class="icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="6,9 12,15 18,9"/>
-              </svg>
-            </button>
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item
-                  v-for="item in STATUS_FILTERS"
-                  :key="item.key"
-                  :command="item.key"
-                >
-                  <span
-                    class="filter-menu-item"
-                    :class="{ active: item.key === 'all' ? activeStatusFilters.length === 0 : activeStatusFilters.includes(item.key) }"
-                  >
-                    <span class="filter-menu-check">
-                      <svg
-                        v-if="item.key === 'all' ? activeStatusFilters.length === 0 : activeStatusFilters.includes(item.key)"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2.5"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                      >
-                        <polyline points="20,6 9,17 4,12"/>
-                      </svg>
-                    </span>
-                    {{ item.label }}
-                  </span>
-                </el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
+            <svg class="icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="1,4 1,10 7,10"/>
+              <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+            </svg>
+          </button>
           <button
             class="btn btn-outline btn-sm btn-icon toolbar-compact-icon"
             :disabled="!result"
             :title="resultFullscreen ? '全画面を終了' : '全画面表示'"
             @click="toggleResultFullscreen"
-          >
-            <svg v-if="!resultFullscreen" class="icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          >            <svg v-if="!resultFullscreen" class="icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="15,3 21,3 21,9"/>
               <polyline points="9,21 3,21 3,15"/>
               <line x1="21" y1="3" x2="14" y2="10"/>
@@ -1555,12 +2006,14 @@ onBeforeUnmount(() => {
               <col class="col-translation">
               <col v-if="showImageColumns" class="col-attach">
               <col class="col-henko">
+              <col class="col-review">
             </colgroup>
             <thead>
               <tr class="thead-group">
-                <th class="col-group-header col-group-old" :colspan="revSectionColspan">【旧】REV</th>
-                <th class="col-group-header col-group-new" :colspan="revSectionColspan">【新】REV</th>
+                <th class="col-group-header col-group-old" :colspan="revSectionColspan">{{ oldHeaderLabel }}</th>
+                <th class="col-group-header col-group-new" :colspan="revSectionColspan">{{ newHeaderLabel }}</th>
                 <th class="col-henko" rowspan="2">比較区分</th>
+                <th class="col-review" rowspan="2">ペアリング</th>
               </tr>
               <tr class="thead-sub">
                 <th class="col-clause">項</th>
@@ -1578,13 +2031,14 @@ onBeforeUnmount(() => {
                 v-for="(clause, idx) in displayedClauses"
                 :key="clause.id"
                 :class="rowClass(clause, idx)"
+                :data-clause-id="clause.id"
               >
                 <td class="cell-num">
                   <span v-if="clause.oldClauseNumber" class="clause-number">{{ clause.oldClauseNumber }}</span>
                   <span v-else class="cell-empty">—</span>
                 </td>
 
-                <!-- Old content — plain text, row highlight only -->
+                <!-- Old content -->
                 <td class="cell-content">
                   <span v-if="clause.oldContent">
                     <span
@@ -1633,19 +2087,57 @@ onBeforeUnmount(() => {
                 <td class="cell-num">
                   <span v-if="clause.newClauseNumber" class="clause-number">{{ clause.newClauseNumber }}</span>
                   <span v-else class="cell-empty">—</span>
+                  <el-tooltip
+                    v-if="needsReview(clause)"
+                    placement="top"
+                    :show-after="120"
+                    :hide-after="0"
+                    :teleported="!resultFullscreen"
+                    popper-class="review-tip-popper"
+                  >
+                    <template #content>
+                      <div class="review-tip">
+                        <div class="review-tip-title">要確認（クリックで処理）</div>
+                        <div
+                          v-for="(w, wi) in unconfirmedWarnings(clause)"
+                          :key="`tip-${wi}`"
+                          class="review-tip-item"
+                        >
+                          <span class="review-tip-type" :class="`review-type-${w.type}`">{{ warnTypeLabel(w.type) }}</span>
+                          <span class="review-tip-reason">{{ w.reason }}</span>
+                        </div>
+                      </div>
+                    </template>
+                    <span class="review-warn" :title="'クリックで処理：' + warnTitle(clause)" @click.stop="handleReviewAction(clause)">!</span>
+                  </el-tooltip>
                 </td>
 
-                <!-- New content — plain text, row highlight only -->
+                <!-- New content -->
                 <td class="cell-content">
-                  <span v-if="clause.newContent">
-                    <span
-                      v-for="(segment, i) in contentSegments(clause, 'new')"
-                      :key="`new-${i}`"
-                      :class="segment.type !== 'same' ? `diff-${segment.type}` : ''"
-                      class="diff-segment"
-                    >{{ segment.text }}</span>
-                  </span>
-                  <span v-else class="cell-empty">—</span>
+                  <template v-if="isEditing(clause.id, 'newContent')">
+                    <textarea
+                      v-model="editingClause.draft"
+                      class="edit-textarea"
+                      rows="4"
+                      placeholder="条項テキストを入力"
+                    ></textarea>
+                    <div class="edit-actions">
+                      <button class="btn btn-primary btn-xs" @click.stop="saveEdit">保存</button>
+                      <button class="btn btn-outline btn-xs" @click.stop="cancelEdit">キャンセル</button>
+                    </div>
+                  </template>
+                  <template v-else>
+                    <span v-if="clause.newContent">
+                      <span
+                        v-for="(segment, i) in contentSegments(clause, 'new')"
+                        :key="`new-${i}`"
+                        :class="segment.type !== 'same' ? `diff-${segment.type}` : ''"
+                        class="diff-segment"
+                      >{{ segment.text }}</span>
+                    </span>
+                    <span v-else class="cell-empty">—</span>
+                    <span v-if="clause.edited?.field === 'newContent'" class="edited-mark" title="手動編集済み">編集済み</span>
+                  </template>
                 </td>
 
                 <td class="cell-translation">
@@ -1679,6 +2171,12 @@ onBeforeUnmount(() => {
                     </button>
                   </div>
                   <span v-else class="cell-empty">—</span>
+                  <button
+                    v-if="hasImageRisk(clause, 'new')"
+                    class="edit-btn"
+                    title="画像を正しい条項に移動する"
+                    @click.stop="openMoveImage(clause, 'new', 0)"
+                  >画像修正</button>
                 </td>
 
                 <td class="cell-henko">
@@ -1690,7 +2188,15 @@ onBeforeUnmount(() => {
                     {{ normalizeChangeStatus(clause) }}
                   </span>
                   <span v-else class="henko-none">{{ UNCHANGED_STATUS_LABEL }}</span>
-                  <span v-if="needsReview(clause)" class="review-mark">要確認</span>
+                </td>
+
+                <td class="cell-review">
+                  <button
+                    v-if="(clause.oldContent || clause.oldClauseNumber) || (clause.newContent || clause.newClauseNumber)"
+                    class="repair-btn"
+                    title="この条項を類似度候補から正しいペアに付け替える"
+                    @click.stop="openRepair(clause)"
+                  >✎</button>
                 </td>
 
               </tr>
@@ -1702,7 +2208,7 @@ onBeforeUnmount(() => {
     </div>
     </div>
 
-    <section v-else-if="activeClauseTab === 'tasks'" class="task-management-page">
+          <section v-else-if="activeClauseTab === 'tasks'" class="task-management-page">
       <div class="task-toolbar">
         <div class="task-status-tabs">
           <button
@@ -1798,40 +2304,52 @@ onBeforeUnmount(() => {
           <div class="task-row-actions">
             <button
               type="button"
-              class="btn btn-outline btn-sm"
+              class="btn btn-outline btn-sm btn-icon task-action-icon"
               :disabled="!canOpenTaskResult(job)"
+              title="結果表示"
               @click="onTaskSelect(job)"
             >
-              結果表示
+              <svg class="icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                <circle cx="12" cy="12" r="3"/>
+              </svg>
             </button>
             <button
               v-if="job.status === 'running' || job.status === 'queued'"
               type="button"
-              class="btn btn-secondary btn-sm"
+              class="btn btn-secondary btn-sm btn-icon task-action-icon"
+              title="中断"
               @click="onTaskStop(job)"
             >
-              中断
+              <svg class="icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="6" y="4" width="4" height="16"/>
+                <rect x="14" y="4" width="4" height="16"/>
+              </svg>
             </button>
             <button
               v-if="job.status === 'failed' || job.status === 'cancelled'"
               type="button"
-              class="btn btn-secondary btn-sm"
+              class="btn btn-secondary btn-sm btn-icon task-action-icon"
+              title="リトライ"
               @click="onTaskRerun(job)"
             >
-              リトライ
+              <svg class="icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="23,4 23,10 17,10"/>
+                <polyline points="1,20 1,14 7,14"/>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+              </svg>
             </button>
             <el-dropdown
               trigger="click"
               :disabled="!canOpenTaskResult(job)"
               @command="handleTaskDownloadCommand"
             >
-              <button class="btn btn-primary btn-sm" :disabled="!canOpenTaskResult(job)">
+              <button class="btn btn-primary btn-sm btn-icon task-action-icon" title="ダウンロード" :disabled="!canOpenTaskResult(job)">
                 <svg class="icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                   <polyline points="7,10 12,15 17,10" />
                   <line x1="12" y1="15" x2="12" y2="3" />
                 </svg>
-                ダウンロード
                 <svg class="icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <polyline points="6,9 12,15 18,9" />
                 </svg>
@@ -1911,6 +2429,79 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </Teleport>
+
+    <!-- 改配ダイアログ：新条項をどの旧条項に付け替えるか、類似度付きで選択 -->
+    <el-dialog
+      :model-value="repairVisible"
+      title="ペアリング修正"
+      width="520px"
+      :append-to-body="true"
+      @close="closeRepair"
+    >
+      <div v-if="repairDialog" class="repair-dialog">
+        <p class="repair-dialog-current">
+          現在のペア：<strong>{{ currentRepairPairLabel }}</strong>
+          <span v-if="currentRepairSimilarity > 0" class="repair-sim">類似度 {{ (currentRepairSimilarity * 100).toFixed(0) }}%</span>
+        </p>
+        <p class="repair-dialog-hint">この新条項をペアリングする旧条項を選択（変更しない場合はそのまま確定＝現在のペアを確認）：</p>
+        <div class="repair-candidate-list">
+          <p v-if="repairCandidatesLoading" class="repair-loading">類似度を計算中...</p>
+          <label
+            v-for="cand in repairCandidates"
+            :key="cand.id"
+            class="repair-candidate"
+            :class="{ selected: repairDialog.targetRowId === cand.id }"
+          >
+            <input
+              type="radio"
+              name="repair-target"
+              :checked="repairDialog.targetRowId === cand.id"
+              @change="repairDialog.targetRowId = cand.id"
+            />
+            <span class="repair-candidate-no">{{ cand.label }}</span>
+            <span class="repair-candidate-text">{{ cand.snippet }}</span>
+            <span class="repair-candidate-sim">{{ (cand.similarity * 100).toFixed(0) }}%</span>
+          </label>
+        </div>
+        <p class="repair-dialog-hint repair-orphan-hint">ペアリング変更後、外れた条項は自動的に「削除/追加」として確定されます。</p>
+      </div>
+      <template #footer>
+        <button class="btn btn-outline btn-sm" @click="closeRepair">キャンセル</button>
+        <button class="btn btn-primary btn-sm" @click="confirmRepair">確定</button>
+      </template>
+    </el-dialog>
+
+    <!-- 画像移動ダイアログ：所属リスクのある画像を正しい条項へ移動 -->
+    <el-dialog
+      :model-value="moveImageVisible"
+      title="画像の所属修正"
+      width="520px"
+      :append-to-body="true"
+      @close="closeMoveImage"
+    >
+      <div v-if="moveImageDialog" class="repair-dialog">
+        <p class="repair-dialog-hint">この画像を移動する条項を選択してください：</p>
+        <div class="repair-candidate-list">
+          <label
+            v-for="t in moveImageTargets"
+            :key="t.id"
+            class="repair-candidate"
+          >
+            <input
+              type="radio"
+              name="move-image-target"
+              @change="confirmMoveImage(t.id)"
+            />
+            <span class="repair-candidate-no">{{ t.label }}</span>
+            <span class="repair-candidate-text">{{ t.snippet }}</span>
+          </label>
+        </div>
+        <p class="repair-dialog-hint repair-orphan-hint">選択すると画像がその条項へ移動され、所属リスクが解決されます。</p>
+      </div>
+      <template #footer>
+        <button class="btn btn-outline btn-sm" @click="closeMoveImage">キャンセル</button>
+      </template>
+    </el-dialog>
 
   </div>
 </template>
@@ -2229,6 +2820,15 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   flex-wrap: nowrap;
+}
+.task-action-icon {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
 }
 
 /* ── Left panel ──────────────────────────────────────────────────────────── */
@@ -2709,6 +3309,7 @@ onBeforeUnmount(() => {
   .col-translation { width: 18.5%; }
   .col-attach  { width: 5%; }
   .col-henko   { width: 8%; }
+  .col-review  { width: 6%; }
 }
 
 .col-sub-label {
@@ -2738,6 +3339,71 @@ tr:hover td { filter: brightness(0.97); }
   white-space: nowrap;
   padding: 8px 2px;
   text-align: center;
+  position: relative;
+}
+
+/* 要確認の警告アイコン（条項番号の右上） */
+.review-warn {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #f59e0b;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: help;
+}
+
+/* hover ツールチップ（要確認の理由） — popper は body 直下にテレポートされるため :global で上書き */
+:global(.review-tip-popper.el-popper.is-dark) {
+  background: #fff !important;
+  border: 1px solid #fcd34d !important;
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(146, 64, 14, 0.12);
+  padding: 6px 8px;
+  max-width: 300px;
+}
+:global(.review-tip-popper.el-popper .el-popper__arrow::before) {
+  background: #fff !important;
+  border: 1px solid #fcd34d !important;
+}
+:global(.review-tip .review-tip-title) {
+  font-size: 11px;
+  font-weight: 700;
+  color: #92400e;
+  margin-bottom: 4px;
+}
+:global(.review-tip .review-tip-item) {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 2px 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #374151;
+}
+:global(.review-tip .review-tip-item + .review-tip-item) {
+  border-top: 1px solid #fef3c7;
+  margin-top: 2px;
+  padding-top: 4px;
+}
+:global(.review-tip .review-tip-type) {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+:global(.review-tip .review-tip-reason) {
+  color: #374151;
 }
 
 .clause-number {
@@ -2803,6 +3469,20 @@ tr:hover td { filter: brightness(0.97); }
   vertical-align: middle;
 }
 
+/* アンドゥボタンと次のボタンの間隔 */
+.undo-icon-btn {
+  margin-right: 8px;
+}
+
+.henko-select {
+  width: 88px;
+}
+
+.cell-review {
+  text-align: center;
+  vertical-align: middle;
+}
+
 .henko-mark {
   font-size: 13px;
   font-weight: 700;
@@ -2821,8 +3501,7 @@ tr:hover td { filter: brightness(0.97); }
 
 .review-mark {
   display: inline-block;
-  margin-left: 6px;
-  padding: 2px 5px;
+  padding: 2px 6px;
   border: 1px solid #f59e0b;
   border-radius: 3px;
   background: #fffbeb;
@@ -2830,6 +3509,289 @@ tr:hover td { filter: brightness(0.97); }
   font-size: 11px;
   line-height: 1.2;
   white-space: nowrap;
+}
+
+.review-btn {
+  display: inline-block;
+  padding: 2px 8px;
+  border: 1px solid #f59e0b;
+  border-radius: 4px;
+  background: #fffbeb;
+  color: #b45309;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  line-height: 1.4;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.review-btn:hover {
+  background: #fef3c7;
+}
+
+.review-btn--active {
+  background: #eff6ff;
+  border-color: #3b82f6;
+  color: #1d4ed8;
+}
+
+/* 改配ボタン（ペアリング修正） */
+.repair-btn {
+  display: inline-block;
+  margin-left: 4px;
+  width: 20px;
+  height: 20px;
+  line-height: 18px;
+  padding: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #475569;
+  font-size: 12px;
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+.repair-btn:hover {
+  background: #eff6ff;
+  border-color: #3b82f6;
+  color: #1d4ed8;
+}
+
+.repair-btn--danger:hover {
+  background: #fef2f2;
+  border-color: #f87171;
+  color: #b91c1c;
+}
+
+/* 一概確認チェックボックス */
+.confirm-all-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #334155;
+  cursor: pointer;
+  user-select: none;
+  margin-right: 8px;
+}
+
+.confirm-all-toggle:hover {
+  color: #0076bf;
+}
+
+.confirm-all-toggle input {
+  width: 14px;
+  height: 14px;
+  accent-color: #0076bf;
+  cursor: pointer;
+}
+
+.confirm-all-count {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #fde68a;
+  color: #92400e;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.review-btn--confirmed {
+  background: #f0fdf4;
+  border-color: #16a34a;
+  color: #15803d;
+}
+
+.review-btn--confirmed:hover {
+  background: #dcfce7;
+}
+
+/* ── 改配ダイアログ ─────────────────────────────────────────── */
+.repair-dialog {
+  font-size: 13px;
+  color: #334155;
+}
+
+.repair-dialog-current {
+  margin: 0 0 10px;
+  font-weight: 500;
+}
+
+.repair-sim {
+  margin-left: 8px;
+  font-size: 12px;
+  color: #b45309;
+  font-weight: 600;
+}
+
+.repair-dialog-hint {
+  margin: 8px 0 6px;
+  font-size: 12px;
+  color: #64748b;
+}
+
+.repair-candidate-list {
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 4px;
+}
+
+.repair-candidate {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.repair-candidate:hover {
+  background: #f8fafc;
+}
+
+.repair-candidate.selected {
+  background: #eff6ff;
+}
+
+.repair-candidate input {
+  accent-color: #0076bf;
+}
+
+/* 抽出テキスト編集（内容不全・条番号の手動修正） */
+.edit-textarea {
+  width: 100%;
+  min-height: 72px;
+  border: 1px solid #3b82f6;
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-family: "Noto Sans JP", sans-serif;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #1e293b;
+  resize: vertical;
+  box-sizing: border-box;
+}
+.edit-textarea:focus { outline: 2px solid rgba(59,130,246,.35); }
+.edit-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.edited-mark {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: #e6f6d8;
+  color: #3f7b1f;
+  font-size: 10px;
+  font-weight: 600;
+}
+.edit-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 6px;
+  padding: 1px 8px;
+  border-radius: 4px;
+  border: 1px solid #93c5fd;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 11px;
+  cursor: pointer;
+}
+.edit-btn:hover { background: #dbeafe; }
+
+.repair-candidate-no {
+  flex: 0 0 auto;
+  font-weight: 600;
+  min-width: 48px;
+}
+
+.repair-candidate-text {
+  flex: 1;
+  font-size: 12px;
+  color: #64748b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repair-candidate-sim {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: #b45309;
+}
+
+.repair-loading {
+  margin: 6px 8px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.repair-orphan-hint {
+  margin-top: 12px;
+}
+
+.repair-orphan-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+}
+
+.repair-orphan-label {
+  font-weight: 600;
+}
+
+.repair-orphan-actions {
+  display: inline-flex;
+  gap: 12px;
+  font-size: 12px;
+}
+
+.repair-orphan-actions label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.repair-orphan-actions input {
+  accent-color: #0076bf;
+}
+
+/* 調整モードのキャンセルボタン */
+.review-cancel {
+  display: inline-block;
+  margin-left: 4px;
+  width: 18px;
+  height: 18px;
+  line-height: 16px;
+  padding: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #64748b;
+  font-size: 11px;
+  cursor: pointer;
+  vertical-align: middle;
+}
+
+.review-cancel:hover {
+  background: #f1f5f9;
+  color: #b91c1c;
+  border-color: #fca5a5;
 }
 
 .status-added {
@@ -2888,6 +3850,36 @@ tr:hover td { filter: brightness(0.97); }
 .badge-deleted {
   background: #e5e7eb;
   color: #475569;
+}
+
+/* ステータス集計 badge（クリックで絞り込み）— アクティブ時は同系色の濃色背景＋白字 */
+.badge-filter {
+  cursor: pointer;
+  transition: all .15s ease;
+  border: 1px solid transparent;
+}
+.badge-filter:hover { filter: brightness(0.94); }
+.badge-filter-active {
+  color: #fff;
+}
+.badge-secondary.badge-filter-active { background: #475569; }
+.badge-changed.badge-filter-active { background: #9a3412; }
+.badge-added.badge-filter-active { background: #3f7b1f; }
+.badge-deleted.badge-filter-active { background: #475569; }
+
+/* 要確認 badge（クリックで絞り込み切替） */
+.badge-review {
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #f59e0b;
+  cursor: pointer;
+  transition: all .15s ease;
+}
+.badge-review:hover { background: #fde68a; }
+.badge-review-active {
+  background: #f59e0b;
+  color: #fff;
+  border-color: #f59e0b;
 }
 
 /* ── Image thumbnails — horizontal row ───────────────────────────────────── */

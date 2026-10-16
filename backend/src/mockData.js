@@ -42,12 +42,63 @@ export const MOCK_SPEC_TREE_MMD = `flowchart LR
   root --> n2
   n2 --> n3`;
 
-export const MOCK_CLAUSE_COMPARE = {
-  totalClauses: 6,
-  changedClauses: 3,
-  clauses: [
-    {
-      id: 'c1',
+/** リスク警告ヘルパー（source: 'align'=対齐類似度 / 'extract'=抽出品質） */
+export function reviewWarning(type, side, reason, source = 'align') {
+  return { source, type, side, reason, confirmedAt: null, confirmedBy: null };
+}
+
+function buildExtraClauses() {
+  const topics = [
+    // [番号, 旧内容, 新内容, 旧訳, 新訳, status, risk?]
+    ['3.3', 'Furnace load shall not exceed the rated capacity of the work zone.', 'Furnace load shall not exceed the rated capacity of the work zone.', '炉の負荷は、作業ゾーンの定格容量を超えてはならない。', '炉の負荷は、作業ゾーンの定格容量を超えてはならない。', '無'],
+    ['3.4', 'Atmosphere control records shall be retained for the life of the part.', 'Atmosphere control records shall be retained for the life of the part.', '雰囲気制御記録は、部品の寿命にわたって保管しなければならない。', '雰囲気制御記録は、部品の寿命にわたって保管しなければならない。', '無'],
+    ['3.5', 'Heating rates above 25C per minute require engineering approval.', 'Heating rates above 25C per minute require engineering approval and a validated load pattern.', '毎分25℃を超える加熱速度には、技術承認が必要である。', '毎分25℃を超える加熱速度には、技術承認と検証済みの負荷パターンが必要である。', '変更', { type: 'low-similarity', side: 'pair', reason: '類似度が低いため、正しいペアかどうか確認が必要' }],
+    ['5.5', 'Thermocouple calibration records shall include probe depth.', 'Thermocouple calibration records shall include probe depth and immersion length.', '熱電対の校正記録には、プローブ深さを含めなければならない。', '熱電対の校正記録には、プローブ深さと浸漬長さを含めなければならない。', '変更'],
+    ['5.6', 'TUS data points shall be positioned per furnace classification.', 'TUS data points shall be positioned per furnace classification and recorded on Form T-4.', 'TUSデータポイントは、炉分類に従って配置しなければならない。', 'TUSデータポイントは、炉分類に従って配置し、様式T-4に記録しなければならない。', '変更', { type: 'low-similarity', side: 'pair', reason: '類似度が低いため、正しいペアかどうか確認が必要' }],
+    ['6.3', 'Furnace qualification shall be re-validated after major repairs.', 'Furnace qualification shall be re-validated after major repairs.', '炉の認定は、大規模修理後に再検証されなければならない。', '炉の認定は、大規模修理後に再検証されなければならない。', '無'],
+    ['6.4', 'Class 1 furnaces require continuous recorder charts.', 'Class 1 furnaces require continuous recorder charts and electronic logging.', 'クラス1炉には、連続記録計チャートが必要である。', 'クラス1炉には、連続記録計チャートと電子ログが必要である。', '変更'],
+    ['8.1', 'Heat treat batch records shall list operator and date.', 'Heat treat batch records shall list operator, date, and furnace used.', '熱処理バッチ記録には、作業者と日付を記載しなければならない。', '熱処理バッチ記録には、作業者、日付、使用炉を記載しなければならない。', '変更'],
+    ['8.2', 'Hardness testing shall follow ASTM E18.', 'Hardness testing shall follow ASTM E18.', '硬さ試験は、ASTM E18に従わなければならない。', '硬さ試験は、ASTM E18に従わなければならない。', '無'],
+    ['8.3', 'Metallurgical examination shall be performed on one sample per batch.', 'Metallurgical examination shall be performed on one sample per batch.', '金属組織検査は、バッチごとに1サンプル実施しなければならない。', '金属組織検査は、バッチごとに1サンプル実施しなければならない。', '無'],
+    ['9.1', 'Quench media temperature shall be verified before each load.', 'Quench media temperature shall be verified before each load.', '焼入れ媒体温度は、各負荷前に検証しなければならない。', '焼入れ媒体温度は、各負荷前に検証しなければならない。', '無'],
+    ['9.2', 'Age hardening cycles shall follow the approved schedule.', 'Age hardening cycles shall follow the approved schedule.', '時効硬化サイクルは、承認されたスケジュールに従わなければならない。', '時効硬化サイクルは、承認されたスケジュールに従わなければならない。', '無'],
+    ['10.1', 'Material certificates shall identify heat number and grade.', 'Material certificates shall identify heat number, grade, and supplier.', '材料証明書には、熱処理番号とグレードを記載しなければならない。', '材料証明書には、熱処理番号、グレード、供給元を記載しなければならない。', '変更'],
+    ['10.2', 'Chemical composition shall be verified against purchase order.', 'Chemical composition shall be verified against purchase order.', '化学成分は、発注書と照合して検証しなければならない。', '化学成分は、発注書と照合して検証しなければならない。', '無'],
+    ['11.1', 'Penetrant inspection shall be performed after final machining.', 'Penetrant inspection shall be performed after final machining.', '浸透探傷検査は、最終加工後に実施しなければならない。', '浸透探傷検査は、最終加工後に実施しなければならない。', '無'],
+    ['11.2', 'Magnetic particle inspection shall use the wet continuous method.', 'Magnetic particle inspection shall use the wet continuous method.', '磁粉探傷検査は、湿式連続法を用いなければならない。', '磁粉探傷検査は、湿式連続法を用いなければならない。', '無'],
+    ['12.1', 'Quality audits shall be scheduled semi-annually.', 'Quality audits shall be scheduled semi-annually.', '品質監査は、半年ごとに計画しなければならない。', '品質監査は、半年ごとに計画しなければならない。', '無'],
+    ['12.2', 'Operator training records shall be current and traceable.', 'Operator training records shall be current and traceable.', '作業者の訓練記録は、最新かつ追跡可能でなければならない。', '作業者の訓練記録は、最新かつ追跡可能でなければならない。', '無'],
+    ['12.3', 'Nonconformance reports shall be dispositioned within 30 days.', 'Nonconformance reports shall be dispositioned within 30 days.', '不適合報告書は、30日以内に処置されなければならない。', '不適合報告書は、30日以内に処置されなければならない。', '無'],
+    ['12.4', 'Subcontracted heat treatment requires prior written approval.', 'Subcontracted heat treatment requires prior written approval and audit access.', '外注熱処理には、事前の書面承認が必要である。', '外注熱処理には、事前の書面承認と監査アクセスが必要である。', '変更', { type: 'low-similarity', side: 'pair', reason: '類似度が低いため、正しいペアかどうか確認が必要' }],
+    ['12.5', 'Record retention shall follow the contract data requirements.', 'Record retention shall follow the contract data requirements.', '記録の保管は、契約データ要件に従わなければならない。', '記録の保管は、契約データ要件に従わなければならない。', '無'],
+    ['12.6', 'Preventive maintenance of furnaces shall be scheduled monthly.', 'Preventive maintenance of furnaces shall be scheduled monthly.', '炉の予防保守は、毎月計画しなければならない。', '炉の予防保守は、毎月計画しなければならない。', '無'],
+  ];
+  return topics.map((t, i) => {
+    const [num, oldEn, newEn, oldJp, newJp, status, risk] = t;
+    const isAdd = status === '追加';
+    const isDel = status === '削除';
+    const clause = {
+      id: `cx${i + 1}`,
+      oldClauseNumber: isAdd ? '' : num,
+      newClauseNumber: isDel ? '' : num,
+      oldContent: isAdd ? '' : oldEn,
+      oldTranslation: isAdd ? '' : oldJp,
+      oldImages: [],
+      newContent: isDel ? '' : newEn,
+      newTranslation: isDel ? '' : newJp,
+      newImages: [],
+      status,
+    };
+    if (risk) {
+      clause.reviewWarnings = [reviewWarning(risk.type, risk.side, risk.reason, risk.source || 'align')];
+    }
+    return clause;
+  });
+}
+
+const BASE_CLAUSES = [
+  {
+    id: 'c1',
       oldClauseNumber: '3.1',
       newClauseNumber: '3.1',
       oldContent: 'Furnace temperature uniformity shall be verified per Table 1.',
@@ -60,6 +111,9 @@ export const MOCK_CLAUSE_COMPARE = {
         { url: mockEvidenceImage('TABLE 1A', '#14a88b'), label: '新 画像2' },
       ],
       status: '変更',
+      reviewWarnings: [
+        reviewWarning('misclassified', 'new', '画像「TABLE 1A」は条項 3.1 の内容と一致しない可能性がある（分類の誤り）', 'extract'),
+      ],
     },
     {
       id: 'c2',
@@ -72,7 +126,10 @@ export const MOCK_CLAUSE_COMPARE = {
       newTranslation: '熱電対は、AMS2750Fに従い90日ごとに校正されなければならない。',
       newImages: [{ url: mockEvidenceImage('NEW 3.2', '#0076bf'), label: '新 画像1' }],
       status: '変更',
-      reviewRequired: true,
+      reviewWarnings: [
+        reviewWarning('low-similarity', 'pair', '類似度が低いため、正しいペアかどうか確認が必要'),
+        reviewWarning('incomplete', 'new', '文末が途切れている可能性がある（抽出が不完全）', 'extract'),
+      ],
     },
     {
       id: 'c3',
@@ -97,7 +154,9 @@ export const MOCK_CLAUSE_COMPARE = {
       newTranslation: 'TUS記録は7年間保管し、デジタル署名を含めなければならない。',
       newImages: [{ url: mockEvidenceImage('NEW 5.4', '#0076bf'), label: '新 画像1' }],
       status: '変更',
-      reviewRequired: true,
+      reviewWarnings: [
+        reviewWarning('low-similarity', 'pair', '類似度が低いため、正しいペアかどうか確認が必要'),
+      ],
     },
     {
       id: 'c5',
@@ -122,11 +181,32 @@ export const MOCK_CLAUSE_COMPARE = {
       newTranslation: 'クラス1炉における補助熱電対の配置は、図3-2に従わなければならない。',
       newImages: [{ url: mockEvidenceImage('NEW 7.1', '#14a88b'), label: '新 画像1' }],
       status: '追加',
-      reviewRequired: true,
+      reviewWarnings: [
+        reviewWarning('low-similarity', 'pair', '類似度が低いため、正しいペアかどうか確認が必要'),
+      ],
     },
-  ],
-};
+  ];
 
+const EXTRA_CLAUSES = buildExtraClauses();
+// リスクデモ版：抽出/対齐リスクを注入した条項リスト
+const ALL_CLAUSES_RISKY = [
+  ...BASE_CLAUSES,
+  ...EXTRA_CLAUSES,
+];
+// デフォルト（クリーン）版：リスクなし
+const ALL_CLAUSES_CLEAN = ALL_CLAUSES_RISKY
+  .map(({ reviewWarnings, ...rest }) => ({ ...rest, reviewWarnings: undefined }));
+
+export const MOCK_CLAUSE_COMPARE = {
+  totalClauses: ALL_CLAUSES_CLEAN.length,
+  changedClauses: ALL_CLAUSES_CLEAN.filter((c) => c.status === '変更').length,
+  clauses: ALL_CLAUSES_CLEAN,
+};
+export const MOCK_CLAUSE_COMPARE_RISKY = {
+  totalClauses: ALL_CLAUSES_RISKY.length,
+  changedClauses: ALL_CLAUSES_RISKY.filter((c) => c.status === '変更').length,
+  clauses: ALL_CLAUSES_RISKY,
+};
 /** @returns {Record<string, PromptVersion[]>} */
 export function createInitialPrompts() {
   const now = new Date().toISOString();
@@ -209,7 +289,7 @@ export function createInitialJobs() {
       progress: 58,
       promptVersionName: '2606_顧客確認版',
       templateId: 'default',
-      templateName: '標準テンプレート',
+      templateName: '1期共通テンプレート',
       templateVersion: 'v1.0',
       sessionId: 'st-active-running-001',
       rootFileId: 'M000501',
@@ -247,7 +327,7 @@ export function createInitialJobs() {
       progress: 34,
       promptVersionName: '2606_顧客確認版',
       templateId: 'default',
-      templateName: '標準テンプレート',
+      templateName: '1期共通テンプレート',
       templateVersion: 'v1.0',
       sessionId: 'st-history-failed-001',
       rootFileId: 'M000621',
@@ -266,7 +346,7 @@ export function createInitialJobs() {
       progress: 46,
       promptVersionName: '2606_顧客確認版',
       templateId: 'default',
-      templateName: '標準テンプレート',
+      templateName: '1期共通テンプレート',
       templateVersion: 'v1.0',
       sessionId: 'st-history-cancelled-001',
       rootFileId: 'P2TF1',
@@ -302,7 +382,7 @@ export function createInitialJobs() {
       progress: 100,
       promptVersionName: '2606_顧客確認版',
       templateId: 'default',
-      templateName: '標準テンプレート',
+      templateName: '1期共通テンプレート',
       templateVersion: 'v1.0',
       sessionId: 'cc-history-002',
       factory: '安来工場',
@@ -319,7 +399,7 @@ export function createInitialJobs() {
       progress: 63,
       promptVersionName: '2606_顧客確認版',
       templateId: 'default',
-      templateName: '標準テンプレート',
+      templateName: '1期共通テンプレート',
       templateVersion: 'v1.0',
       sessionId: 'cc-active-running-001',
       factory: '安来工場',

@@ -18,12 +18,12 @@ export default defineConfig({
     port: Number(process.env.FRONTEND_PORT || 8888),
     proxy: {
       '/api': {
-        target: `http://0.0.0.0:${process.env.PORT || 3002}`,
+        target: `http://127.0.0.1:${process.env.PORT || 3002}`,
         changeOrigin: true,
         timeout: 2 * 60 * 60 * 1000,
         proxyTimeout: 2 * 60 * 60 * 1000,
       },
-      '/uploads': `http://0.0.0.0:${process.env.PORT || 3002}`,
+      '/uploads': `http://127.0.0.1:${process.env.PORT || 3002}`,
     },
   }
 })

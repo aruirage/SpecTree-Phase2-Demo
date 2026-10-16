@@ -1,9 +1,9 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
+import { ref, reactive, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useJobProgress } from '@/composables/useJobProgress';
 import { fetchJobsByType, cancelJob, rerunJob, loadSpecTreeResult } from '@/api/jobs';
-import { fetchPromptTemplates, resetPromptTemplate, updatePromptTemplate } from '@/api/promptTemplates';
+import { analyzePromptTemplate, fetchPromptTemplates, resetPromptTemplate, updatePromptTemplate } from '@/api/promptTemplates';
 import { closeResultTab, upsertResultTab } from '@/utils/resultTabs';
 
 defineOptions({ name: 'SpecTree' });
@@ -43,8 +43,27 @@ const activeSpecTreeTab = ref('generate');
 const activeTaskStatusTab = ref('all');
 const specTreePromptDialogOpen = ref(false);
 const specTreePromptSaving = ref(false);
-const specTreePromptText = ref('');
-const specTreePromptTemplateId = ref('default');
+const specTreeUserRules = ref('');
+// 仕様ツリーの抽出ルールは条項比較と同じくモジュール単位で編集する。
+const specTreeModules = ref([]);
+const specTreeExpanded = reactive({});
+const specTreeChecks = reactive({});
+const specTreeChecking = reactive({});
+const specTreePromptTemplateId = ref('standard');
+// 編集画面に出すモジュール。空モジュールは出さないが、「追加ルール」だけは追記用に空でも残す。
+const editableSpecTreeModules = computed(() =>
+  specTreeModules.value.filter((mod) => {
+    if (mod.hidden) return false;
+    if ((mod.rules || []).some((rule) => rule.layer !== 'system' && !rule.hidden)) return true;
+    return mod.id === 'spec_tree_series_rules';
+  }),
+);
+
+function visibleSpecTreeRules(mod) {
+  return (mod.rules || [])
+    .map((rule, index) => ({ rule, index }))
+    .filter(({ rule }) => rule.layer !== 'system' && !rule.hidden);
+}
 const SPEC_TREE_LABEL_WRAP_LIMIT = {
   LR: 34,
   TD: 26,
@@ -112,29 +131,147 @@ const {
   fallbackLabel: '処理中...',
 });
 
+function resetSpecTreeModuleChecks() {
+  for (const key of Object.keys(specTreeChecks)) delete specTreeChecks[key];
+  for (const key of Object.keys(specTreeExpanded)) delete specTreeExpanded[key];
+}
+
+function applySpecTreeTemplate(template) {
+  if (!template) return;
+  specTreePromptTemplateId.value = template.id;
+  specTreeUserRules.value = template.specTreeUserRules || '';
+  specTreeModules.value = template.specTreeModules ? JSON.parse(JSON.stringify(template.specTreeModules)) : [];
+  resetSpecTreeModuleChecks();
+}
+
 async function loadSpecTreePrompt() {
   try {
     const data = await fetchPromptTemplates();
-    const template = data.templates?.find((item) => item.id === 'default') || data.templates?.[0];
-    if (template) {
-      specTreePromptTemplateId.value = template.id;
-      specTreePromptText.value = template.specTreePromptText || '';
-    }
+    const template = data.templates?.find((item) => item.id === 'standard') || data.templates?.[0];
+    applySpecTreeTemplate(template);
   } catch (promptError) {
     console.warn('spec tree prompt load failed', promptError);
+  }
+}
+
+async function openSpecTreePromptDialog() {
+  await loadSpecTreePrompt();
+  specTreePromptDialogOpen.value = true;
+}
+
+function isSpecTreeModuleOpen(id) {
+  return specTreeExpanded[id] === true;
+}
+
+function toggleSpecTreeModule(id) {
+  specTreeExpanded[id] = !specTreeExpanded[id];
+}
+
+function specTreeRuleStatus(moduleId, index) {
+  const map = specTreeChecks[moduleId];
+  const entry = map ? map[index] : null;
+  return entry ? entry.status : null;
+}
+
+// 無効と判定された理由。ルールの下に出して、どの規則と衝突しているかを見せる。
+function specTreeRuleReason(moduleId, index) {
+  const map = specTreeChecks[moduleId];
+  const entry = map ? map[index] : null;
+  return entry && entry.status === 'ng' ? entry.reason : '';
+}
+
+function specTreeStatusLabel(moduleId, index) {
+  const status = specTreeRuleStatus(moduleId, index);
+  if (status === 'ok') return '有効';
+  if (status === 'ng') return '無効';
+  return '';
+}
+
+// ルールを 1 行足す。並び順は全体の最大値＋1 にして末尾に置く。
+function addSpecTreeRule(mod) {
+  let maxOrder = -1;
+  for (const item of specTreeModules.value) {
+    for (const rule of item.rules || []) maxOrder = Math.max(maxOrder, rule.order ?? 0);
+  }
+  mod.rules.push({ timing: 'spec_tree', layer: 'user', order: maxOrder + 1, text: '' });
+  delete specTreeChecks[mod.id];
+  specTreeExpanded[mod.id] = true;
+}
+
+function removeSpecTreeRule(mod, index) {
+  mod.rules.splice(index, 1);
+  delete specTreeChecks[mod.id];
+}
+
+// 解析結果を各モジュールのチェック表示へ反映し、無効件数を返す。
+function applySpecTreeAnalysisChecks(modules, analysis) {
+  const byText = {};
+  for (const item of analysis?.rules || []) byText[String(item.line).trim()] = item;
+  let ng = 0;
+  for (const mod of modules) {
+    const map = {};
+    (mod.rules || []).forEach((rule, index) => {
+      if (rule.layer === 'system' || rule.hidden) return;
+      const text = String(rule.text || '').trim();
+      if (!text) return;
+      const hit = byText[text];
+      if (hit && hit.status === 'rejected') {
+        map[index] = { status: 'ng', reason: hit.reason || '' };
+        ng += 1;
+        specTreeExpanded[mod.id] = true;
+      } else {
+        map[index] = { status: 'ok', reason: '' };
+      }
+    });
+    specTreeChecks[mod.id] = map;
+  }
+  return ng;
+}
+
+// モジュール単体をチェックし、ルールごとに有効／無効だけを返す。
+async function checkSpecTreeModule(mod) {
+  specTreeChecking[mod.id] = true;
+  try {
+    const data = await analyzePromptTemplate(specTreePromptTemplateId.value, {
+      promptType: 'spec_tree',
+      specTreeModules: [mod],
+    });
+    const ng = applySpecTreeAnalysisChecks([mod], data.analysis);
+    specTreeExpanded[mod.id] = true;
+    if (ng) ElMessage.warning(`無効なルールが ${ng} 件あります`);
+    else ElMessage.success('すべて有効です');
+  } catch (promptError) {
+    ElMessage.error(promptError.message || 'チェックに失敗しました');
+  } finally {
+    specTreeChecking[mod.id] = false;
   }
 }
 
 async function saveSpecTreePrompt() {
   specTreePromptSaving.value = true;
   try {
-    const data = await updatePromptTemplate(specTreePromptTemplateId.value, {
-      specTreePromptText: specTreePromptText.value,
+    // 保存前に全ルールを検証。無効があれば画面に理由を出し、保存しない。
+    const analysis = await analyzePromptTemplate(specTreePromptTemplateId.value, {
+      promptType: 'spec_tree',
+      specTreeModules: specTreeModules.value,
     });
-    specTreePromptText.value = data.template?.specTreePromptText || specTreePromptText.value;
+    const ng = applySpecTreeAnalysisChecks(specTreeModules.value, analysis.analysis);
+    if (ng > 0) {
+      ElMessage.error(`無効なルールが ${ng} 件あるため保存できません。修正または削除してください。`);
+      return;
+    }
+    const data = await updatePromptTemplate(specTreePromptTemplateId.value, {
+      specTreeModules: specTreeModules.value,
+    });
+    specTreeUserRules.value = data.template?.specTreeUserRules || specTreeUserRules.value;
     specTreePromptDialogOpen.value = false;
     ElMessage.success('抽出ルールを保存しました');
   } catch (promptError) {
+    if (promptError.rejected?.length) {
+      applySpecTreeAnalysisChecks(specTreeModules.value, {
+        rules: promptError.rejected.map((item) => ({ line: item.line, status: 'rejected', reason: item.reason })),
+      });
+    }
     ElMessage.error(promptError.message || '抽出ルールの保存に失敗しました');
   } finally {
     specTreePromptSaving.value = false;
@@ -144,7 +281,7 @@ async function saveSpecTreePrompt() {
 async function resetSpecTreePrompt() {
   try {
     const data = await resetPromptTemplate(specTreePromptTemplateId.value);
-    specTreePromptText.value = data.template?.specTreePromptText || '';
+    applySpecTreeTemplate(data.template);
     ElMessage.success('標準設定に戻しました');
   } catch (promptError) {
     ElMessage.error(promptError.message || '標準設定の復元に失敗しました');
@@ -475,7 +612,17 @@ function normalizeSpecTreeResult(result) {
     mmdContent: result.mmdContent,
     nodeCount: result.nodeCount ?? result.treeNodes?.length ?? 0,
     treeNodes: Array.isArray(result.treeNodes) ? result.treeNodes : null,
+    unreferencedNodes: Array.isArray(result.unreferencedNodes) ? result.unreferencedNodes : [],
   };
+}
+
+function unrefDisplayLabel(node) {
+  return String(node?.label || '').replace(/\\n/g, ' / ');
+}
+
+// 未参照ノードは孤立ファイル由来（ファイル名のみ、名称なし）
+function unrefFileName(node) {
+  return String(node?.fileName || node?.label || '').replace(/\\n/g, ' / ');
 }
 
 function warnIfSpecTreeHasNoChildNodes(result) {
@@ -1398,7 +1545,7 @@ watch(rootFileIds, () => {
     <aside class="left-panel">
       <div class="panel-header">
         <span class="panel-header-title">スペックツリー</span>
-        <button type="button" class="btn btn-outline btn-sm prompt-edit-button" @click="specTreePromptDialogOpen = true">Prompt編集</button>
+        <button type="button" class="btn btn-outline btn-sm prompt-edit-button" @click="openSpecTreePromptDialog">抽出ルール設定</button>
       </div>
 
       <div class="panel-body">
@@ -1785,6 +1932,25 @@ watch(rootFileIds, () => {
 
         <!-- Zoom indicator -->
         <div v-if="treeData" class="zoom-indicator">{{ Math.round(zoom * 100) }}%</div>
+
+        <!-- 未参照（階層 -1）パネル -->
+        <div v-if="treeData && treeData.unreferencedNodes && treeData.unreferencedNodes.length" class="unref-panel">
+          <div class="unref-panel-header">
+            <span class="unref-panel-title">未参照（階層 -1）</span>
+            <span class="unref-panel-count">{{ treeData.unreferencedNodes.length }}</span>
+          </div>
+          <div class="unref-panel-body">
+            <div
+              v-for="node in treeData.unreferencedNodes"
+              :key="node.id"
+              class="unref-item"
+              :title="unrefDisplayLabel(node)"
+            >
+              <span class="unref-item-badge">未参照</span>
+              <span class="unref-item-label">{{ unrefFileName(node) }}</span>
+            </div>
+          </div>
+        </div>
       </div>
     </main>
     </div>
@@ -1888,40 +2054,52 @@ watch(rootFileIds, () => {
           <div class="task-row-actions">
             <button
               type="button"
-              class="btn btn-outline btn-sm"
+              class="btn btn-outline btn-sm btn-icon task-action-icon"
               :disabled="!canOpenTaskResult(job)"
+              title="結果表示"
               @click="onTaskSelect(job)"
             >
-              結果表示
+              <svg class="icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                <circle cx="12" cy="12" r="3"/>
+              </svg>
             </button>
             <button
               v-if="job.status === 'running' || job.status === 'queued'"
               type="button"
-              class="btn btn-secondary btn-sm"
+              class="btn btn-secondary btn-sm btn-icon task-action-icon"
+              title="中断"
               @click="onTaskStop(job)"
             >
-              中断
+              <svg class="icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="6" y="4" width="4" height="16"/>
+                <rect x="14" y="4" width="4" height="16"/>
+              </svg>
             </button>
             <button
               v-if="job.status === 'failed' || job.status === 'cancelled'"
               type="button"
-              class="btn btn-secondary btn-sm"
+              class="btn btn-secondary btn-sm btn-icon task-action-icon"
+              title="リトライ"
               @click="onTaskRerun(job)"
             >
-              リトライ
+              <svg class="icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="23,4 23,10 17,10"/>
+                <polyline points="1,20 1,14 7,14"/>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+              </svg>
             </button>
             <el-dropdown
               trigger="click"
               :disabled="!canOpenTaskResult(job)"
               @command="handleTaskDownloadCommand"
             >
-              <button class="btn btn-primary btn-sm" :disabled="!canOpenTaskResult(job)">
+              <button class="btn btn-primary btn-sm btn-icon task-action-icon" title="ダウンロード" :disabled="!canOpenTaskResult(job)">
                 <svg class="icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                   <polyline points="7,10 12,15 17,10" />
                   <line x1="12" y1="15" x2="12" y2="3" />
                 </svg>
-                ダウンロード
                 <svg class="icon-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <polyline points="6,9 12,15 18,9" />
                 </svg>
@@ -1948,11 +2126,42 @@ watch(rootFileIds, () => {
       </div>
       </section>
 
-    <el-dialog v-model="specTreePromptDialogOpen" title="スペックツリー抽出ルール" width="720px" class="spec-tree-prompt-dialog">
-      <el-input v-model="specTreePromptText" type="textarea" :rows="16" resize="vertical" placeholder="抽出ルールを入力してください" />
+    <el-dialog v-model="specTreePromptDialogOpen" title="スペックツリー抽出ルール" width="760px" class="spec-tree-prompt-dialog">
+      <div class="stp-modules">
+        <article
+          v-for="mod in editableSpecTreeModules"
+          :key="mod.id"
+          class="stp-card"
+          :class="{ open: isSpecTreeModuleOpen(mod.id) }"
+        >
+          <header class="stp-head" @click="toggleSpecTreeModule(mod.id)">
+            <span class="stp-caret" aria-hidden="true"></span>
+            <h4>{{ mod.name }}</h4>
+            <el-button size="small" class="stp-check" :loading="specTreeChecking[mod.id]" @click.stop="checkSpecTreeModule(mod)">チェック</el-button>
+          </header>
+          <div v-show="isSpecTreeModuleOpen(mod.id)" class="stp-body">
+            <ul class="stp-rules">
+              <li
+                v-for="({ rule, index }, displayIndex) in visibleSpecTreeRules(mod)"
+                :key="index"
+                class="stp-rule"
+              >
+                <span class="stp-rule-index" aria-hidden="true">{{ displayIndex + 1 }}</span>
+                <el-input v-model="rule.text" type="textarea" :autosize="{ minRows: 1, maxRows: 5 }" />
+                <div class="stp-actions">
+                  <span v-if="specTreeRuleStatus(mod.id, index)" class="stp-status" :class="specTreeRuleStatus(mod.id, index)">{{ specTreeStatusLabel(mod.id, index) }}</span>
+                  <button type="button" class="stp-remove" title="削除" @click="removeSpecTreeRule(mod, index)">×</button>
+                </div>
+                <p v-if="specTreeRuleReason(mod.id, index)" class="stp-reason">{{ specTreeRuleReason(mod.id, index) }}</p>
+              </li>
+            </ul>
+            <button type="button" class="stp-add" @click="addSpecTreeRule(mod)">＋ ルールを追加</button>
+          </div>
+        </article>
+      </div>
       <template #footer>
-        <el-button @click="resetSpecTreePrompt">標準に戻す</el-button>
         <el-button @click="specTreePromptDialogOpen = false">キャンセル</el-button>
+        <el-button @click="resetSpecTreePrompt">標準に戻す</el-button>
         <el-button type="primary" :loading="specTreePromptSaving" @click="saveSpecTreePrompt">保存</el-button>
       </template>
     </el-dialog>
@@ -2866,6 +3075,15 @@ watch(rootFileIds, () => {
   gap: 8px;
   flex-wrap: nowrap;
 }
+.task-action-icon {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
 
 /* ── Right panel ─────────────────────────────────────────────────────────── */
 .right-panel {
@@ -3192,5 +3410,283 @@ watch(rootFileIds, () => {
   border-radius: 6px;
   font-size: 12px;
   font-weight: 500;
+}
+
+/* ── 未参照（階層 -1）パネル ─────────────────────────────── */
+.unref-panel {
+  position: absolute;
+  right: 16px;
+  bottom: 48px;
+  width: 264px;
+  max-height: 42%;
+  display: flex;
+  flex-direction: column;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.08);
+  overflow: hidden;
+  z-index: 20;
+}
+
+.unref-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: #fffbeb;
+  border-bottom: 1px solid #fde68a;
+  flex-shrink: 0;
+}
+
+.unref-panel-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #92400e;
+}
+
+.unref-panel-count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #fde68a;
+  color: #92400e;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.unref-panel-body {
+  overflow-y: auto;
+  padding: 4px 6px;
+  max-height: 220px;
+}
+
+.unref-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 6px;
+}
+
+.unref-item:hover {
+  background: #f8fafc;
+}
+
+.unref-item-badge {
+  flex: 0 0 auto;
+  font-size: 10px;
+  line-height: 16px;
+  height: 16px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #fef3c7;
+  color: #92400e;
+  font-weight: 600;
+}
+
+.unref-item-label {
+  font-size: 12px;
+  color: #334155;
+  line-height: 16px;
+  word-break: break-all;
+}
+
+/* ── 仕様ツリー抽出ルール（モジュール編集） ───────────────────────────── */
+.stp-modules {
+  display: grid;
+  gap: 8px;
+}
+
+.stp-card {
+  border: 1px solid #eef1f5;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.stp-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 13px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.stp-head:hover {
+  background: #fafbfd;
+}
+
+.stp-head h4 {
+  margin: 0;
+  color: #1e3a5f;
+  font-size: 13.5px;
+  font-weight: 500;
+}
+
+.stp-caret {
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid #b0bcc9;
+  transition: transform 0.15s ease;
+}
+
+.stp-card.open .stp-caret {
+  transform: rotate(90deg);
+}
+
+.stp-check {
+  margin-left: auto;
+  border-radius: 4px;
+}
+
+.stp-body {
+  padding: 0 13px 12px 26px;
+}
+
+.stp-rules {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stp-rule {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: start;
+}
+
+.stp-rule-index {
+  padding-top: 7px;
+  color: #94a3b8;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.7;
+  text-align: right;
+  user-select: none;
+}
+
+.stp-rule :deep(.el-textarea__inner) {
+  min-height: 30px !important;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: #f1f5f9;
+  color: #334155;
+  font-size: 12.5px;
+  line-height: 1.7;
+  box-shadow: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.stp-rule :deep(.el-textarea__inner:hover) {
+  background: #e8eef5;
+}
+
+.stp-rule :deep(.el-textarea__inner:focus) {
+  border-color: #0076bf;
+  background: #fff;
+  box-shadow: 0 0 0 2px rgba(0, 118, 191, 0.1);
+}
+
+.stp-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 30px;
+}
+
+.stp-status {
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.stp-status.ok {
+  color: #1d9e75;
+}
+
+.stp-status.ng {
+  color: #d85a30;
+}
+
+.stp-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: #fdece6;
+  color: #d85a30;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+
+.stp-rule:hover .stp-remove {
+  opacity: 1;
+}
+
+.stp-remove:hover {
+  background: #f8d5cb;
+}
+
+/* 無効なルールの下に、どの規則と衝突しているかを出す。 */
+.stp-reason {
+  grid-column: 2 / 3;
+  margin: 1px 0 5px;
+  padding: 0;
+  background: transparent;
+  color: #d93025;
+  font-size: 11.5px;
+  line-height: 1.65;
+}
+
+.stp-card.locked .stp-rule {
+  grid-template-columns: 22px minmax(0, 1fr);
+}
+
+.stp-readonly {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border: 1px solid #eef1f5;
+  border-radius: 4px;
+  background: #fafbfd;
+  color: #475569;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.stp-add {
+  margin: 6px 0 0;
+  padding: 3px 8px;
+  border: 1px dashed #dbe3ec;
+  border-radius: 4px;
+  background: transparent;
+  color: #98a2b3;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.stp-add:hover {
+  border-color: #0076bf;
+  color: #0076bf;
 }
 </style>

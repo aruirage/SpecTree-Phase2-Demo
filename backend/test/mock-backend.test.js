@@ -17,10 +17,12 @@ async function getAvailablePort() {
 }
 
 async function waitForHealth(baseUrl, getOutput) {
-  const deadline = Date.now() + 5000;
+  // 並列実行時は複数のバックエンドが同時に起動するため、総待ち時間を広めに取り、
+  // かつ 1 回の fetch にタイムアウトを付けて「1 本の fetch が固まると全体が固まる」のを防ぐ。
+  const deadline = Date.now() + 15000;
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(`${baseUrl}/health`);
+      const res = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(1000) });
       if (res.ok) return;
     } catch {}
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -42,15 +44,20 @@ async function readJson(res) {
   return data;
 }
 
-async function pollJson(url, predicate, { timeoutMs = 8000 } = {}) {
+async function pollJson(url, predicate, { timeoutMs = 15000 } = {}) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const res = await fetch(url, { cache: 'no-store' });
-    if (res.ok) {
-      const data = await res.json();
-      if (predicate(data)) return data;
-    } else {
-      assert.equal(res.status, 202);
+    try {
+      const res = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(3000) });
+      if (res.ok) {
+        const data = await res.json();
+        if (predicate(data)) return data;
+      } else {
+        assert.equal(res.status, 202);
+      }
+    } catch (error) {
+      // 検証失敗（202 以外）は即座に伝播させる。ネットワークの一時的な失敗のみリトライする。
+      if (error && error.code === 'ERR_ASSERTION') throw error;
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
@@ -137,7 +144,10 @@ test('mock backend supports spec tree and clause compare demo flows', async (t) 
     `${baseUrl}/api/clause-compare/result?sessionId=${encodeURIComponent(oldUpload.sessionId)}`,
     (data) => Array.isArray(data.clauses),
   );
-  assert.equal(clauseResult.totalClauses, 6);
+  // mock の条項数は意図的に増減するため、固定値ではなく
+  // 「宣言された件数と実際の配列長が一致すること」を不変条件として検証する。
+  assert.ok(Array.isArray(clauseResult.clauses) && clauseResult.clauses.length > 0);
+  assert.equal(clauseResult.totalClauses, clauseResult.clauses.length);
 });
 
 test('prompt setup is not exposed in phase 2 demo logs or API', async (t) => {
@@ -381,9 +391,10 @@ test('clause compare excel export keeps row styling separate from field diff sty
   await workbook.xlsx.load(await exportRes.arrayBuffer());
   const sheet = workbook.getWorksheet('条項比較');
   assert.ok(sheet);
-  assert.equal(sheet.getCell('A1').value, '【旧】REV');
+  // 表ヘッダーは旧/新のファイル名（拡張子なし）で表す（clauseCompare.js:222-227, 393-394）。
+  assert.equal(sheet.getCell('A1').value, 'AMS2750E');
   assert.equal(sheet.getCell('A1').font.name, 'Noto Sans JP');
-  assert.equal(sheet.getCell('D1').value, '【新】REV');
+  assert.equal(sheet.getCell('D1').value, 'AMS2750F');
   assert.equal(sheet.getCell('G1').value, '比較区分');
   assert.equal(sheet.getCell('A2').value, '項');
   assert.equal(sheet.getCell('A2').font.name, 'Noto Sans JP');
@@ -489,12 +500,19 @@ test('spec tree upload preserves Japanese filenames and exports Excel layout', a
     `${baseUrl}/api/spec-tree/result?sessionId=${encodeURIComponent(start.jobs[0].sessionId)}`,
     (data) => Boolean(data.mmdContent),
   );
+  // モックのツリーは sessionId を含む seed で 3 種から選ばれる（store.js:1324）。
+  // 「削除」を含まない variant もあるため、どの variant でも成立する不変条件を検証する:
+  //  - 「補完」は全 variant に必ず存在する
+  //  - 実際に含まれる区分は、すべて mmd 上で対応する class として描画される
   const supplementNode = result.treeNodes.find((node) => node.changeType === '補完');
-  const deletedNode = result.treeNodes.find((node) => node.changeType === '削除');
   assert.ok(supplementNode, 'spec tree result should include supplement nodes');
-  assert.ok(deletedNode, 'spec tree result should include deleted nodes');
-  assert.match(result.mmdContent, /class .* supplementNode/);
-  assert.match(result.mmdContent, /class .* deletedNode/);
+  const changedNodes = result.treeNodes.filter(
+    (node) => node.changeType === '補完' || node.changeType === '削除',
+  );
+  for (const node of changedNodes) {
+    const cls = node.changeType === '補完' ? 'supplementNode' : 'deletedNode';
+    assert.match(result.mmdContent, new RegExp(`class .* ${cls}`));
+  }
 
   const exportRes = await fetch(`${baseUrl}/api/spec-tree/export?format=excel&sessionId=${encodeURIComponent(start.jobs[0].sessionId)}`);
   assert.equal(exportRes.status, 200);
@@ -520,4 +538,45 @@ test('spec tree upload preserves Japanese filenames and exports Excel layout', a
   assert.equal(sheet.getRow(6).getCell(5).value, '削除');
   assert.equal(sheet.getRow(12).getCell(5).value, '補完');
   assert.equal(sheet.getRow(13).getCell(5).value, '補完');
+});
+
+// 1期共通テンプレートは条項比較の基準なので読み取り専用のままだが、
+// 仕様ツリーの抽出ルールは全規格で 1 本しかなく、これ自体が編集対象なので保存できる。
+test('the shared baseline stays read-only for clause compare but accepts spec tree rules', async (t) => {
+  const baseUrl = await startBackend(t);
+  const url = `${baseUrl}/api/prompt-templates/standard`;
+
+  // 条項比較の側（名前・抽出ルール・モジュール）は書き換えられない。
+  for (const body of [{ name: '書き換え' }, { userRules: 'x' }, { modules: [] }]) {
+    const field = Object.keys(body)[0];
+    const blocked = await fetch(url, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    assert.equal(blocked.status, 400, `${field} が保存できてしまいました`);
+  }
+
+  // 仕様ツリーの抽出ルールは編集できる。
+  const current = await readJson(await fetch(url));
+  assert.equal(current.template.readOnly, true);
+  const modules = JSON.parse(JSON.stringify(current.template.specTreeModules));
+  const target = modules
+    .find((mod) => mod.id === 'spec_tree_extraction')
+    .rules.find((rule) => rule.layer === 'system');
+  target.text = `${target.text} (edited in the demo)`;
+
+  const saved = await readJson(await fetch(url, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ specTreeModules: modules }),
+  }));
+  const savedTarget = saved.template.specTreeModules
+    .find((mod) => mod.id === 'spec_tree_extraction')
+    .rules.find((rule) => rule.layer === 'system');
+  assert.equal(savedTarget.text, target.text);
+  // 画面で書き換えた文が、実行時に送る system プロンプトへ反映される。
+  assert.match(saved.template.specTreeBaseSystem, /\(edited in the demo\)/);
+  // 編集していない行は逐字のまま。
+  assert.match(saved.template.specTreeBaseSystem, /^You extract a specification tree from a truncated PDF input:/);
 });

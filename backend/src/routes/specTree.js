@@ -49,12 +49,18 @@ const SPEC_TREE_EXPORT_ROWS = [
   { specNo: 'P2TF1', level: 3, specName: 'Regulated Materials', revision: '' },
   { specNo: 'P4TF3', level: 2, specName: 'Cleaning of Titanium', revision: '' },
   { specNo: 'ISAJT-P4TF8', level: 2, specName: 'Swab Etching', revision: 'S6' },
+  { specNo: 'ASTM E21', level: -1, specName: '', revision: '', unrefType: 'independent' },
+  { specNo: 'ISO 9001', level: -1, specName: '', revision: '', unrefType: 'uncertain' },
 ];
 
 function withInheritedChangeTypes(rows = []) {
   const inheritedChangeTypes = [];
   return rows.map((row) => {
-    const level = Math.max(0, Number(row.level) || 0);
+    const level = Number(row.level) || 0;
+    if (level < 0) {
+      // 未参照ノード（階層 -1）：変更区分の継承対象外。区分列は一律「未参照」
+      return { ...row, changeType: '未参照' };
+    }
     inheritedChangeTypes.length = level + 1;
     const inheritedChangeType = inheritedChangeTypes[level - 1] || '';
     const changeType = row.changeType || inheritedChangeType || '';

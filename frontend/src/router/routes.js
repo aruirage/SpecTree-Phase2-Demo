@@ -33,7 +33,7 @@ const routes = [
         path: 'prompt-templates',
         name: 'PromptTemplates',
         component: () => import('../views/PromptTemplates/index.vue'),
-        meta: { title: 'プロンプト設定' }
+        meta: { title: '抽出ルール設定' }
       }
     ]
   },

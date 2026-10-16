@@ -1,20 +1,18 @@
 import { Router } from 'express';
 import multer from 'multer';
-import { createInitialPromptTemplateConfigs, store } from '../store.js';
+import { baseSystemForTemplate, buildCompiledUserMessage, createInitialPromptTemplateConfigs, renderSpecTreeRulesFromModules, renderUserRulesFromModules, store } from '../store.js';
+import { compileUserRules, SWITCHES } from '../promptCompiler.js';
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
-const SERIES_OPTIONS = ['AMS', 'ASTM', 'DMF', 'ISAJT', 'その他'];
+// 条項比較のテンプレートは AMS / ISAJT / AQ / FASOP の 4 系列＋標準（2026-10-16 ユーザー指定）。
+const SERIES_OPTIONS = ['AMS', 'ISAJT', 'AQ', 'FASOP', 'その他'];
 
-const FIXED_BASE_SYSTEM = `あなたは PDF 構造化分析を行うアシスタントです。入力された PDF の情報を、指定された JSON 形式で出力してください。
-
-固定制約：
-- 有効な JSON のみを出力し、Markdown や説明文を追加しない。
-- 出力フィールド名とデータ型を変更しない。
-- 入力で確認できる情報だけを使用し、入力にない内容、番号、ファイル名、改訂記号を生成しない。
-- 不確実な値を推測で補完せず、入力に存在する原文を優先する。
-- 入力で確認できない、欠落の疑いがある、または構造判断が不安定な結果は review_required を true にする。確信度を数値で推測しない。
-- 入力データを静かに破棄せず、判断できない場合は指定された出力構造の中で保持する。`;
+/**
+ * 条項比較の 1 期 system は定数（clauseCompareBaseSystem.js）から返す。
+ * 仕様ツリーの 1 期 system はモジュールへ分かれて載っており、ここから組み立てる
+ * （本文の出所は specTreeBaseSystem.js。二重定義しない）。
+ */
 
 function findTemplate(id) {
   return store.promptTemplateConfigs.find((item) => item.id === id);
@@ -23,10 +21,13 @@ function findTemplate(id) {
 function publicTemplate(template) {
   return {
     ...template,
-    baseSystem: FIXED_BASE_SYSTEM,
-    outputSchema: {
-      clauses: '[{ id, text, source_anchor_block_index, source_block_start, source_block_end, source_body_block_indexes, table_images, review_required }]',
+    // テンプレート自身が持つ system プロンプトを組み立てる。二期でテンプレートごとに
+    // 差し替えれば、この値も自動で追随する。
+    baseSystem: {
+      scan: baseSystemForTemplate(template, 'scan'),
+      textLayer: baseSystemForTemplate(template, 'textLayer'),
     },
+    specTreeBaseSystem: baseSystemForTemplate(template, 'specTree'),
   };
 }
 
@@ -35,13 +36,17 @@ router.get('/', (_req, res) => {
 });
 
 router.post('/', (req, res) => {
-  if (store.promptTemplateConfigs.length >= 10) return res.status(400).json({ error: 'テンプレートは最大10件まで作成できます' });
+  // 上限はユーザーが追加したテンプレートだけを数える（初期テンプレートは対象外）。
+  const customCount = store.promptTemplateConfigs.filter((item) => !item.isDefault).length;
+  if (customCount >= 10) return res.status(400).json({ error: '追加できるテンプレートは最大10件までです' });
   const source = findTemplate(req.body?.sourceId) || store.promptTemplateConfigs[0];
   const template = {
     ...source,
     id: `custom-${Date.now()}`,
     name: String(req.body?.name || `${source.name} コピー`).trim(),
     isDefault: false,
+    isStandard: false,
+    readOnly: false,
     series: Array.isArray(req.body?.series) && req.body.series.length ? req.body.series : ['その他'],
     sampleFiles: [],
     version: 'v1.0',
@@ -63,17 +68,57 @@ router.get('/:id', (req, res) => {
 router.put('/:id', (req, res) => {
   const template = findTemplate(req.params.id);
   if (!template) return res.status(404).json({ error: 'prompt template not found' });
-  const editable = [
-    'name', 'promptText', 'specTreePromptText', 'promptSections', 'published',
-  ];
+  // 1期共通テンプレートは条項比較の基準なので読み取り専用（変更する場合はコピーしてから編集する）。
+  // ただし仕様ツリーの抽出ルールは全規格で 1 本しかなく、これ自体が編集対象なので保存を許可する。
+  const CLAUSE_COMPARE_FIELDS = ['name', 'modules', 'userRules', 'promptText', 'published'];
+  const touchesClauseCompare = CLAUSE_COMPARE_FIELDS.some((field) => Object.hasOwn(req.body || {}, field));
+  if (template.readOnly && touchesClauseCompare) {
+    return res.status(400).json({ error: '1期共通テンプレートは読み取り専用です（変更する場合はコピーしてから編集してください）' });
+  }
+
+  // 先に組み立て結果を仮計算し、無効ルールがあれば保存しない（テンプレートを汚さない）。
+  const next = { ...template };
+  const editable = ['name', 'modules', 'userRules', 'specTreeModules', 'specTreeUserRules', 'promptText', 'specTreePromptText', 'published'];
   for (const field of editable) {
-    if (Object.hasOwn(req.body || {}, field)) template[field] = req.body[field];
+    if (Object.hasOwn(req.body || {}, field)) next[field] = req.body[field];
   }
-  if (req.body?.promptSections?.clause_compare) {
-    template.promptText = Object.values(req.body.promptSections.clause_compare).join('\n');
+  if (Array.isArray(req.body?.modules) && !Object.hasOwn(req.body, 'userRules')) {
+    next.userRules = renderUserRulesFromModules(req.body.modules);
   }
-  if (req.body?.promptSections?.spec_tree) {
-    template.specTreePromptText = Object.values(req.body.promptSections.spec_tree).join('\n');
+  if (Array.isArray(req.body?.specTreeModules) && !Object.hasOwn(req.body, 'specTreeUserRules')) {
+    next.specTreeUserRules = renderSpecTreeRulesFromModules(req.body.specTreeModules);
+  }
+
+  const toValidate = [];
+  if (Array.isArray(req.body?.modules) || Object.hasOwn(req.body || {}, 'userRules')) {
+    toValidate.push({ kind: 'clause_compare', text: next.userRules || '' });
+  }
+  if (Array.isArray(req.body?.specTreeModules) || Object.hasOwn(req.body || {}, 'specTreeUserRules')) {
+    toValidate.push({ kind: 'spec_tree', text: next.specTreeUserRules || '' });
+  }
+  const rejected = toValidate.flatMap((item) =>
+    compileUserRules(item.text).rejected.map((rule) => ({
+      ...rule,
+      promptType: item.kind,
+    })),
+  );
+  if (rejected.length) {
+    return res.status(400).json({
+      error: `無効なルールが ${rejected.length} 件あるため保存できません。修正または削除してから再度保存してください。`,
+      rejected: rejected.map((rule) => ({ line: rule.line, reason: rule.reason, promptType: rule.promptType })),
+    });
+  }
+
+  for (const field of editable) {
+    if (Object.hasOwn(next, field) && Object.hasOwn(req.body || {}, field)) {
+      template[field] = next[field];
+    }
+  }
+  if (Array.isArray(req.body?.modules) && !Object.hasOwn(req.body, 'userRules')) {
+    template.userRules = next.userRules;
+  }
+  if (Array.isArray(req.body?.specTreeModules) && !Object.hasOwn(req.body, 'specTreeUserRules')) {
+    template.specTreeUserRules = next.specTreeUserRules;
   }
   template.updatedAt = new Date().toISOString();
   res.json({ template: publicTemplate(template) });
@@ -92,7 +137,10 @@ router.post('/:id/generate', upload.array('files', 10), async (req, res) => {
 router.delete('/:id', (req, res) => {
   const index = store.promptTemplateConfigs.findIndex((item) => item.id === req.params.id);
   if (index < 0) return res.status(404).json({ error: 'prompt template not found' });
-  if (template.isDefault) return res.status(400).json({ error: '標準テンプレートは削除できません' });
+  const target = store.promptTemplateConfigs[index];
+  // 初期状態に戻す基準を持つテンプレート（標準 + 初期系列）は削除できない。
+  if (target.isStandard) return res.status(400).json({ error: '1期共通テンプレートは削除できません（初期状態に戻す際の基準です）' });
+  if (target.isDefault) return res.status(400).json({ error: '初期テンプレートは削除できません（初期状態に戻す際の基準です）' });
   store.promptTemplateConfigs.splice(index, 1);
   res.status(204).end();
 });
@@ -102,25 +150,51 @@ router.post('/:id/reset', (req, res) => {
   if (!template) return res.status(404).json({ error: 'prompt template not found' });
   const defaults = createInitialPromptTemplateConfigs();
   const defaultTemplate = defaults.find((item) => item.id === template.id) || defaults[0];
+  template.modules = defaultTemplate.modules;
+  template.userRules = defaultTemplate.userRules;
+  template.specTreeModules = defaultTemplate.specTreeModules;
+  template.specTreeUserRules = defaultTemplate.specTreeUserRules;
   template.promptText = defaultTemplate.promptText;
-  template.promptText = 'Business extraction rules:\n- Exclude non-clause content such as tables of contents, prefaces, references, disclaimers, copyright notices, order information, contact information, licenses, watermarks, and document-distribution notices.\n- Preserve the original wording, terminology, numbers, punctuation, and meaning. Do not correct grammar, paraphrase, summarize, or add information that is not present in the document.\n- Keep every explicitly stated clause number in the original order. Start each clause on a new line. Merge only unnumbered continuation text that clearly belongs to the preceding clause.\n- Keep a clause heading, clause number, and clause body on separate lines when they appear as separate lines in the source. Do not merge them into one line.\n- Keep every paragraph on a separate line. Keep every numbered or bulleted list item on a separate line, including items beginning with 1), 2), (1), (2), -, ・, or •.\n- Treat parenthesized lists such as (1), (2), and (3) as part of the current clause, but preserve each list item on its own line.\n- If Japanese, English, or another language appears in separate source lines, preserve the language boundaries and keep those lines separate.\n- Preserve intentional line breaks in headings, paragraphs, and lists. Join only line breaks that are clearly caused by PDF layout within the same sentence.\n- Remove repeated headers, footers, and boilerplate even when they appear in the middle of a clause.\n- Treat numbered lists and bulleted lists as text. Classify content as a table or image only when its layout clearly has a table or image structure.\n- Do not infer, complete, reorder, or invent missing clause numbers, specifications, versions, prefixes, or suffixes.';
-  template.specTreePromptText = 'PDF から仕様ツリーのノードと参照関係を抽出してください。\n\n業務ルール：\n- 仕様書名、仕様番号、ノード名、改訂記号、参照関係を原文どおりに保持する。\n- 本文、一覧、表、図面内の仕様書参照を確認し、親子関係を構成する。\n- すべての階層を抽出し、削除または補完されたノードの子ノードも同じ変更状態として扱う。\n- 入力に存在しない仕様番号、ファイル名、ノードを番号順から推測して追加しない。\n- 不明な参照は原文のまま保持し、黙って削除しない。';
-  template.promptSections = {
-    clause_compare: {
-      extraction: 'タイトル、本文、条項番号、箇条書き、番号付きリスト、子条項を抽出し、原文と原番号を保持する。',
-      structure: '条項番号から次の同階層番号の直前までを同一条項とし、番号のない続きのブロックを直前の条項に統合する。',
-      textLayout: 'タイトルと本文、異なる言語の文章を改行して保持する。通常のリストや整列した文章はテキストとして抽出する。',
-      mediaExceptions: '明確な行列構造を持つ表や図だけを画像として抽出し、端部の文字、脚注、注記を含める。ヘッダー、フッター、透かし、印章、注釈は除外し、項目番号を推測しない。',
-    },
-    spec_tree: {
-      extraction: '仕様書名、仕様番号、ノード名、改訂記号、参照関係を原文どおりに抽出する。',
-      structure: '原文の参照関係から親子階層を構成し、すべての階層を抽出する。削除または補完されたノードの子ノードも同じ変更状態として扱う。',
-      textLayout: 'ノード名、仕様番号、ファイル名、必要な原文の改行を保持し、一覧や本文を漏れなく抽出する。',
-      mediaExceptions: '表や図を途中で切断せず、端部の文字や脚注を含めて抽出する。入力にないノード、番号、ファイル名を生成しない。',
-    },
-  };
+  template.specTreePromptText = defaultTemplate.specTreePromptText;
+  template.clauseCompareRules = defaultTemplate.clauseCompareRules;
+  template.specTreeRules = defaultTemplate.specTreeRules;
   template.updatedAt = new Date().toISOString();
   res.json({ template: publicTemplate(template) });
+});
+
+/**
+ * ユーザーが書いた自然言語ルールの解析。
+ * そのままシステムプロンプトへ連結せず、
+ *   ① 逸脱した指示の検証  ② 設定スイッチへの照合  ③ モデルへ渡す自由記述の抽出
+ * を行う。命中したルールはプログラム側で反映し、モデルには渡さない。
+ */
+router.post('/:id/analyze', (req, res) => {
+  const template = findTemplate(req.params.id);
+  if (!template) return res.status(404).json({ error: 'prompt template not found' });
+  const promptType = req.body?.promptType === 'spec_tree' ? 'spec_tree' : 'clause_compare';
+  const fallback = promptType === 'spec_tree' ? template.specTreeUserRules : template.userRules;
+  // モジュール単体チェックにも対応する。条項比較と仕様ツリーで組み立て方が違う。
+  const modules = Array.isArray(req.body?.modules)
+    ? req.body.modules
+    : Array.isArray(req.body?.specTreeModules)
+      ? req.body.specTreeModules
+      : null;
+  const renderModules = promptType === 'spec_tree' ? renderSpecTreeRulesFromModules : renderUserRulesFromModules;
+  const text =
+    typeof req.body?.text === 'string'
+      ? req.body.text
+      : modules
+        ? renderModules(modules)
+        : fallback || '';
+  const analysis = compileUserRules(text);
+  res.json({
+    promptType,
+    switches: SWITCHES,
+    analysis: {
+      ...analysis,
+      compiled: promptType === 'spec_tree' ? null : buildCompiledUserMessage(analysis.freeText),
+    },
+  });
 });
 
 router.post('/:id/test', upload.single('file'), async (req, res) => {
@@ -172,7 +246,8 @@ router.post('/:id/test', upload.single('file'), async (req, res) => {
     },
     body: JSON.stringify({
       model: process.env.OPENAI_MODEL || 'gpt-5',
-      instructions: `${FIXED_BASE_SYSTEM}\n\n客户配置 Prompt：\n${configuredPrompt || ''}`,
+      // 1 期の system プロンプトはそのテンプレートのモジュールから組み立てる（仕様ツリーは専用の 1 本）。
+      instructions: `${baseSystemForTemplate(template, isSpecTree ? 'specTree' : 'scan')}\n\n客户配置 Prompt：\n${configuredPrompt || ''}`,
       input,
       text: { format: { type: 'json_object' } },
       store: false,

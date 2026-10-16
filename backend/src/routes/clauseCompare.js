@@ -19,6 +19,7 @@ import {
   normalizeExtractionTemplate,
 } from '../store.js';
 import { normalizeUploadedFileName } from '../utils/fileNames.js';
+import { needlemanWunschSimilarity } from '../utils/needlemanWunsch.js';
 
 const MB = 1024 * 1024;
 const CLAUSE_COMPARE_FILE_SIZE_LIMIT_MB = 30;
@@ -36,6 +37,7 @@ const REPORT_COLUMNS = [
   { header: '【新】記載内容', key: 'newContent', width: 42 },
   { header: '【新】日本語訳（参考）', key: 'newTranslation', width: 34 },
   { header: '比較区分', key: 'status', width: 12 },
+  { header: '確認状況', key: 'reviewStatus', width: 14 },
 ];
 const COLORS = {
   header: 'FF1E3A5F',
@@ -185,6 +187,9 @@ function normalizeStatus(clause) {
 }
 
 function clauseToReportRow(clause) {
+  const warnings = Array.isArray(clause.reviewWarnings) ? clause.reviewWarnings : [];
+  const unconfirmed = warnings.filter((w) => !w.confirmedAt);
+  const reviewStatus = unconfirmed.length > 0 ? `要確認 ${unconfirmed.length}件` : (warnings.length > 0 ? '確認済み' : '');
   return {
     oldClauseNumber: clause.oldClauseNumber || '',
     oldContent: clause.oldContent || '',
@@ -193,6 +198,7 @@ function clauseToReportRow(clause) {
     newContent: clause.newContent || '',
     newTranslation: clause.newTranslation || '',
     status: normalizeStatus(clause),
+    reviewStatus,
   };
 }
 
@@ -204,13 +210,22 @@ function csvEscape(value) {
 
 function buildClauseCompareCsv(result) {
   const rows = [
-    REPORT_COLUMNS.map((column) => column.header),
+    reportHeaders(result),
     ...result.clauses.map((clause) => {
       const row = clauseToReportRow(clause);
       return REPORT_COLUMNS.map((column) => row[column.key]);
     }),
   ];
   return `\ufeff${rows.map((row) => row.map(csvEscape).join(',')).join('\n')}`;
+}
+
+// 旧/新の表ヘッダーをファイル名（拡張子なし）で表す（無い場合は「旧」/「新」）
+function reportHeaders(result = {}) {
+  const oldName = baseName(result.oldFileName) || '旧';
+  const newName = baseName(result.newFileName) || '新';
+  return REPORT_COLUMNS.map((column) => (
+    column.header.replace(/^【旧】/, `${oldName} `).replace(/^【新】/, `${newName} `)
+  ));
 }
 
 function applyCellBorder(cell) {
@@ -374,12 +389,15 @@ async function buildClauseCompareWorkbook(result) {
   sheet.mergeCells('A1:C1');
   sheet.mergeCells('D1:F1');
   sheet.mergeCells('G1:G2');
-  sheet.getCell('A1').value = '【旧】REV';
-  sheet.getCell('D1').value = '【新】REV';
+  sheet.mergeCells('H1:H2');
+  sheet.getCell('A1').value = baseName(result.oldFileName) || '【旧】REV';
+  sheet.getCell('D1').value = baseName(result.newFileName) || '【新】REV';
   sheet.getCell('G1').value = '比較区分';
   sheet.getCell('G1').alignment = { vertical: 'middle', horizontal: 'center' };
+  sheet.getCell('H1').value = '確認状況';
+  sheet.getCell('H1').alignment = { vertical: 'middle', horizontal: 'center' };
 
-  ['A1', 'D1', 'G1'].forEach((address) => {
+  ['A1', 'D1', 'G1', 'H1'].forEach((address) => {
     const cell = sheet.getCell(address);
     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COLORS.header } };
     cell.font = { name: EXPORT_FONT_NAME, bold: true, color: { argb: 'FFFFFFFF' } };
@@ -425,6 +443,17 @@ async function buildClauseCompareWorkbook(result) {
   return workbook;
 }
 
+// 内容類似度（Needleman-Wunsch）バッチ計算
+// body: { pairs: [[textA, textB], ...] } → { similarities: [0..1, ...] }
+router.post('/similarity', (req, res) => {
+  const pairs = Array.isArray(req.body?.pairs) ? req.body.pairs : [];
+  const similarities = pairs.map((pair) => {
+    const [a, b] = Array.isArray(pair) ? pair : [];
+    return needlemanWunschSimilarity(a, b);
+  });
+  res.json({ similarities });
+});
+
 router.post('/upload', upload.single('file'), (req, res) => {
   const fileType = req.body.fileType || 'old';
   const file = req.file
@@ -439,6 +468,9 @@ router.post('/upload', upload.single('file'), (req, res) => {
   if (!file) return res.status(400).json({ error: 'file is required' });
   if (!validateFileSize(file, CLAUSE_COMPARE_FILE_SIZE_LIMIT_MB, res)) return;
   const session = getOrCreateSession(req.body.sessionId);
+  if (req.body.riskDemo === true || req.body.riskDemo === 'true' || req.body.riskDemo === 1 || req.body.riskDemo === '1') {
+    session.riskDemo = true;
+  }
   if (fileType === 'new') session.newFile = file;
   else session.oldFile = file;
   res.json({
@@ -477,10 +509,11 @@ function beginRun(session, clientRunId, factory, ipAddress, templateOptions = {}
   session.oldTemplate = normalizeExtractionTemplate(templateOptions.oldTemplate || selectedTemplate);
   session.newTemplate = normalizeExtractionTemplate(templateOptions.newTemplate || selectedTemplate);
   session.selectedTemplate = selectedTemplate;
-  // キャッシュをチェック
+  // キャッシュをチェック（riskDemo もキーに含めてクリーン版と分離）
   const cached = getCachedResult('clause_compare', files, {
     templateId: selectedTemplate.templateId,
     templateVersion: selectedTemplate.templateVersion,
+    riskDemo: session.riskDemo ? 1 : 0,
   });
   
   if (cached) {
@@ -544,6 +577,7 @@ function beginRun(session, clientRunId, factory, ipAddress, templateOptions = {}
     options: {
       templateId: selectedTemplate.templateId,
       templateVersion: selectedTemplate.templateVersion,
+      riskDemo: session.riskDemo ? 1 : 0,
     },
     factory,
     ipAddress,
@@ -596,7 +630,11 @@ router.get('/result', (req, res) => {
     return res.status(404).json({ error: 'cancelled', code: 499 });
   }
   if (!session.result) return res.status(202).json({ status: 'processing' });
-  res.json(session.result);
+  res.json({
+    ...session.result,
+    oldFileName: session.oldFile?.fileName || '',
+    newFileName: session.newFile?.fileName || '',
+  });
 });
 
 router.post('/cancel', (req, res) => {
@@ -615,8 +653,14 @@ router.get('/export', (req, res) => {
   if (!session?.result) return res.status(404).json({ error: 'no result' });
   const format = req.query.format || 'csv';
   const downloadBaseName = clauseDownloadBaseName(session);
+  // 表ヘッダー用に旧/新ファイル名を同梱する
+  const exportResult = {
+    ...session.result,
+    oldFileName: session.oldFile?.fileName || '',
+    newFileName: session.newFile?.fileName || '',
+  };
   if (format === 'excel') {
-    return buildClauseCompareWorkbook(session.result)
+    return buildClauseCompareWorkbook(exportResult)
       .then((workbook) => workbook.xlsx.writeBuffer())
       .then((buffer) => {
         res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -630,7 +674,7 @@ router.get('/export', (req, res) => {
 
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', contentDisposition(`${downloadBaseName}.csv`));
-  res.send(buildClauseCompareCsv(session.result));
+  res.send(buildClauseCompareCsv(exportResult));
 });
 
 router.get('/images/export', (req, res) => {
